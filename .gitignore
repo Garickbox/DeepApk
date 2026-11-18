@@ -1,6 +1,30 @@
+# Gradle
 .gradle/
 build/
-app/build/
-local.properties
-*.log
+apk/
+*.apk
+*.aab
+
+# IDE
 .idea/
+*.iml
+
+# Local config & secrets
+local.properties
+*.keystore
+*.jks
+
+# Logs & temp
+*.log
+build.log
+all_run_*.log
+build-fix-report.txt
+deep_tmp/
+
+# Backups
+*.backup_*
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
