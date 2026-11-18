@@ -75,35 +75,34 @@ notif "🚀 Patch start" "$MSG" 1000
     vib 300; exit 1
   fi
 
-  echo "═══ 5. watch CI + ожидание до конца + ошибка в терминал ═══"
-  toast "5/5 CI (ждём завершения)"
+  echo "═══ 5. watch CI + ЖДЕМ и ВЫТАСКИВАЕМ ОШИБКУ ===="
+  toast "5/5 CI (ждем финала)"
   REPO="Garickbox/DeepApk"
 
-  # Получаем ID последнего раннера
+  # Получаем ID раннера
   RUN_DATA=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/runs?per_page=1")
   RUN_ID=$(echo "$RUN_DATA" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('workflow_runs',[{}])[0].get('id') if d.get('workflow_runs') else '')")
   [ -z "$RUN_ID" ] && { say "❌ Не удалось получить раннер"; exit 1; }
-
+  
   RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
   echo "👉 Раннер: $RUN_URL"
 
-  # Цикл ожидания до завершения сборки
+  # ЦИКЛ ОЖИДАНИЯ (пока status != completed)
   while true; do
     RUN_INFO=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID")
     STATUS=$(echo "$RUN_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status'))")
     CONCLUSION=$(echo "$RUN_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('conclusion'))")
 
+    # Тихий опрос, чтобы не спамить голосом каждую секунду
     echo "ℹ️ status=$STATUS | conclusion=$CONCLUSION"
-
+    
     if [ "$STATUS" = "completed" ]; then
       break
     fi
-
-    say "⏳ Ещё идёт, ждём..."
     sleep 10
   done
 
-  # Теперь точно финал: показываем результат
+  # ФИНАЛ: Если упало - вытаскиваем ТОЛЬКО ошибку
   if [ "$CONCLUSION" = "success" ]; then
     say "✅ Сборка OK"
     notif "✅ CI Success" "Build passed" 1000
@@ -115,6 +114,8 @@ notif "🚀 Patch start" "$MSG" 1000
 
     JOBS_URL=$(echo "$RUN_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('jobs_url'))")
     JOBS=$(curl -s -H "Authorization: Bearer $TOKEN" "$JOBS_URL")
+    
+    # Ищем упавший job
     FAILED_JOB=$(echo "$JOBS" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
@@ -127,19 +128,26 @@ for j in d.get('jobs', []):
     if [ -n "$FAILED_JOB" ]; then
       JOB_NAME=$(echo "$FAILED_JOB" | cut -d'|' -f1)
       JOB_URL=$(echo "$FAILED_JOB" | cut -d'|' -f2)
+      # Вытаскиваем ID job из URL
       JOB_ID=$(echo "$JOB_URL" | python3 -c "import sys,re; u=sys.stdin.read(); m=re.search(r'/jobs/(\d+)',u); print(m.group(1) if m else '')")
 
       echo "❌ Упал job: $JOB_NAME"
+      
       if [ -n "$JOB_ID" ]; then
-        LOGS=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/jobs/$JOB_ID/logs")
-        echo "--- фрагмент ошибки (как в твоём примере) ---"
-        echo "$LOGS" | grep -E "FAILURE|Execution failed|Caused by|e: " -A 3 -B 3 | head -n 20
-        echo "--- конец фрагмента ---"
+        # ГЛАВНОЕ ИЗМЕНЕНИЕ: Мы НЕ качаем весь лог. Мы просим API вернуть только строки с ошибкой.
+        # Но так как API не умеет фильтровать "grep", мы качаем лог и сразу режем его.
+        # Чтобы это не падало на памяти, мы берем только первые 500 строк лога (этого хватает для ошибки)
+        LOGS=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/jobs/$JOB_ID/logs" | head -n 500)
+        
+        echo "--- ФРАГМЕНТ ОШИБКИ (как в твоем примере) ---"
+        # Ищем ключевые маркеры ошибки
+        echo "$LOGS" | grep -E "FAILURE|Execution failed|Caused by|e: " -A 5 -B 5 | head -n 30
+        echo "-------------------------------------------"
       else
-        echo "👉 Лог: $JOB_URL"
+        echo "⚠️ Не удалось вытащить ID job. Смотри ссылку: $JOB_URL"
       fi
     else
-      echo "⚠️ Не удалось найти упавший job — смотри вручную на GitHub Actions"
+      echo "⚠️ Не найдено упавших jobs. Смотри вручную."
     fi
   fi
 } 2>&1 | tee "$LOG"
