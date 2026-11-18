@@ -232,7 +232,7 @@ object DeepSeekApi {
             .put("maxOutputTokens", settings.maxTokens.coerceAtMost(65536))
 
         if (settings.thinkingEnabled &&
-            (settings.geminiModel.contains("2.5") || settings.geminiModel.contains("3"))
+            (settings.geminiModel.contains("2.5") || settings.geminiModel.contains("3") || settings.geminiModel.contains("-4"))
         ) {
             genCfg.put("thinkingConfig", JSONObject().put("includeThoughts", true))
         }

@@ -168,7 +168,7 @@ fun SettingsScreen(
                 SettingsRow(
                     icon = "✦",
                     title = "Ключ Google Gemini",
-                    value = if (draft.geminiApiKey.isBlank()) "Не задан" else "AIza•••${draft.geminiApiKey.takeLast(4)}",
+                    value = if (draft.geminiApiKey.isBlank()) "Не задан" else "${draft.geminiApiKey.take(4)}•••${draft.geminiApiKey.takeLast(4)}",
                     onClick = { showGeminiKeyDialog = true }
                 )
                 HorizontalDivider(color = dividerCol)
@@ -356,7 +356,7 @@ fun SettingsScreen(
         KeyInputDialog(
             title = "Ключ Google Gemini",
             initial = draft.geminiApiKey,
-            placeholder = "AIza...",
+            placeholder = "AIza... или AQ...",
             onSave = {
                 saveNow(draft.copy(geminiApiKey = it))
                 showGeminiKeyDialog = false
@@ -387,8 +387,10 @@ fun SettingsScreen(
         ChoiceDialog(
             title = "Модель Google Gemini",
             items = listOf(
-                "gemini-3.8-flash" to "gemini-3.8-flash (актуальная + thinking)",
-                "gemini-2.5-pro" to "gemini-2.5-pro (максимум ума)"
+                "gemini-3-flash-preview" to "gemini-3-flash-preview (быстрая + thinking)",
+                "gemini-3.1-flash-lite" to "gemini-3.1-flash-lite (лёгкая, Free Tier)",
+                "gemini-3.8-flash" to "gemini-3.8-flash (бывает 503)",
+                "gemini-3.1-pro-preview" to "gemini-3.1-pro-preview (Pro, биллинг)"
             ),
             selected = draft.geminiModel,
             onSelect = {

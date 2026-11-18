@@ -7,7 +7,7 @@ data class AppSettings(
     val apiKey: String = "",
     val geminiApiKey: String = "",
     val model: String = "deepseek-flash",
-    val geminiModel: String = "gemini-3.8-flash",
+    val geminiModel: String = "gemini-3-flash-preview",
     val thinkingEnabled: Boolean = true,
     val webSearchEnabled: Boolean = true,
     val temperature: Float = 1.0f,
@@ -55,8 +55,11 @@ object SettingsStore {
             apiKey = p.getString("api_key", "") ?: "",
             geminiApiKey = p.getString("gemini_api_key", "") ?: "",
             model = p.getString("model", "deepseek-flash") ?: "deepseek-flash",
-            geminiModel = (p.getString("gemini_model", "gemini-3.8-flash") ?: "gemini-3.8-flash")
-                .let { if (it == "gemini-2.5-flash" || it == "gemini-2.0-flash") "gemini-3.8-flash" else it },
+            geminiModel = (p.getString("gemini_model", "gemini-3-flash-preview") ?: "gemini-3-flash-preview")
+                .let { when {
+                    it in listOf("gemini-2.5-flash","gemini-2.0-flash","gemini-2.5-flash-lite","gemini-2.5-pro") -> "gemini-3-flash-preview"
+                    it == "gemini-3.8-flash" && !p.getBoolean("mig38", false) -> { p.edit().putBoolean("mig38", true).putString("gemini_model", "gemini-3-flash-preview").apply(); "gemini-3-flash-preview" }
+                    else -> it } },
             thinkingEnabled = p.getBoolean("thinking_enabled", true),
             webSearchEnabled = webSearch,
             temperature = p.getFloat("temperature", 1.0f),

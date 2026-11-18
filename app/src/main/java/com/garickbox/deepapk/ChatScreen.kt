@@ -958,17 +958,17 @@ fun ChatScreen(
                 if (error.isNotBlank()) {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 150.dp)
                     ) {
                         Row(
                             Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.Top
                         ) {
                             Text(
                                 "❌ $error",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())
                             )
                             Text(
                                 "✕",
