@@ -48,16 +48,26 @@ private val DeepLightColors = lightColorScheme(
 
 class MainActivity : ComponentActivity() {
     private var incomingShareState = mutableStateOf<IncomingShare?>(null)
+    private var incomingSkillState = mutableStateOf<SkillPackage?>(null)
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        val skill = extractIncomingSkill(this, intent)
+        if (skill != null) {
+            incomingSkillState.value = skill
+        } else {
+            extractIncomingShare(this, intent)?.let { incomingShareState.value = it }
+        }
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        extractIncomingShare(this, intent)?.let { incomingShareState.value = it }
+        handleIncomingIntent(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        incomingShareState.value = extractIncomingShare(this, intent)
+        handleIncomingIntent(intent)
         setContent {
             var themeMode by remember { mutableStateOf(SettingsStore.load(this).themeMode) }
             val sysDark = isSystemInDarkTheme()
@@ -80,6 +90,8 @@ class MainActivity : ComponentActivity() {
                             isDark = isDark,
                             incomingShare = incomingShareState.value,
                             onConsumeShare = { incomingShareState.value = null },
+                            incomingSkill = incomingSkillState.value,
+                            onConsumeSkill = { incomingSkillState.value = null },
                             onOpenSettings = { screen = "settings" }
                         )
                         "settings" -> SettingsScreen(

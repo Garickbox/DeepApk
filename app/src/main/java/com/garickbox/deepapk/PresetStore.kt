@@ -35,8 +35,8 @@ data class PromptPreset(
 object PresetStore {
     private val lock = Any()
     private const val PREF_NAME = "deepapk_presets_meta"
-    private const val CURRENT_VER = 3
-    private val CORE_IDS = setOf("default", "termux", "docx_report")
+    private const val CURRENT_VER = 4
+    private val CORE_IDS = setOf("default", "termux", "docx_report", "deepapk_dev")
     private val REMOVED_BUILTIN_IDS = setOf("patch_dev", "writer", "study", "translator", "concise")
 
     private fun file(ctx: Context) = File(ctx.filesDir, "presets.json")
@@ -74,6 +74,13 @@ object PresetStore {
             name = "docx отчет",
             emoji = "📄",
             prompt = readSkillAsset(ctx, "docx_report.md", "Генерируй ГОСТ-документы внутри <doc_report title=\"Отчёт\">...</doc_report>."),
+            isBuiltIn = true
+        ),
+        PromptPreset(
+            id = "deepapk_dev",
+            name = "DeepApk Dev",
+            emoji = "🛠",
+            prompt = readSkillAsset(ctx, "deepapk_dev.md", "Инженер разработки DeepApk (Termux + SAF)."),
             isBuiltIn = true
         )
     )

@@ -1,0 +1,534 @@
+package com.garickbox.deepapk
+
+import android.content.Context
+import android.net.Uri
+import android.provider.DocumentsContract
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+
+sealed class FsReadOp {
+    data class Tree(val path: String) : FsReadOp()
+    data class Grep(val pattern: String, val path: String) : FsReadOp()
+    data class Read(val path: String, val start: Int, val end: Int) : FsReadOp()
+}
+
+sealed class FsWriteOp {
+    abstract val path: String
+    data class Patch(override val path: String, val replacements: List<Pair<String, String>>) : FsWriteOp()
+    data class Write(override val path: String, val content: String) : FsWriteOp()
+}
+
+data class FsApplyResult(
+    val ok: Boolean,
+    val message: String,
+    val modifiedFiles: List<String> = emptyList()
+)
+
+private data class DocEntry(
+    val docId: String,
+    val name: String,
+    val isDir: Boolean,
+    val size: Long
+)
+
+object ProjectFs {
+    private const val PREF = "deepapk_project_fs"
+    private const val KEY_URI = "tree_uri"
+    private const val KEY_LABEL = "tree_label"
+    private const val KEY_ENABLED = "auto_enabled"
+
+    private val IGNORED_DIRS = setOf(".git", ".gradle", "build", ".idea", "apk", "node_modules", "__pycache__", ".cxx")
+    private val BINARY_EXTS = setOf(
+        "png", "jpg", "jpeg", "webp", "gif", "ico", "jar", "apk", "aab",
+        "so", "dex", "class", "zip", "ttf", "otf", "pdf", "docx", "xlsx", "pptx"
+    )
+
+    fun saveTree(ctx: Context, uri: Uri): String {
+        val rootId = DocumentsContract.getTreeDocumentId(uri)
+        val label = rootId.substringAfterLast(':').substringAfterLast('/').ifBlank { "Проект" }
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+            .putString(KEY_URI, uri.toString())
+            .putString(KEY_LABEL, label)
+            .putBoolean(KEY_ENABLED, true)
+            .apply()
+        return label
+    }
+
+    fun clearTree(ctx: Context) {
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+            .remove(KEY_URI)
+            .remove(KEY_LABEL)
+            .putBoolean(KEY_ENABLED, false)
+            .apply()
+    }
+
+    fun setEnabled(ctx: Context, enabled: Boolean) {
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_ENABLED, enabled)
+            .apply()
+    }
+
+    fun isEnabled(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
+
+    fun getLabel(ctx: Context): String =
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString(KEY_LABEL, "").orEmpty()
+
+    fun getTreeUri(ctx: Context): Uri? {
+        val raw = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString(KEY_URI, null) ?: return null
+        val uri = Uri.parse(raw)
+        val hasPerm = ctx.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
+        return if (hasPerm) uri else null
+    }
+
+    fun isReady(ctx: Context): Boolean = getTreeUri(ctx) != null
+
+    fun systemPromptAddendum(ctx: Context): String {
+        val label = getLabel(ctx).ifBlank { "Проект" }
+        val bak = activeBackupCount(ctx)
+        val bakNote = if (bak > 0) " Внимание: сейчас активен бэкап прошлой правки ($bak файл.) — не предлагай новые правки, пока пользователь не проверит текущую." else ""
+        return "ДОСТУП К ПРОЕКТУ (SAF, папка «$label»): у тебя подключён реальный доступ к исходникам на устройстве.$bakNote\n" +
+            "Если нужно посмотреть файлы, найти строку или прочитать точный код — НЕ гадай и НЕ проси пользователя гонять grep, а сразу выведи тег:\n" +
+            "- <fs_tree/> или <fs_tree path=\"app/src/main\"/> — список файлов\n" +
+            "- <fs_grep pattern=\"текст\" path=\"app/src/main\"/> — поиск по коду\n" +
+            "- <fs_read path=\"app/src/main/java/.../File.kt\" start=\"1\" end=\"150\"/> — чтение строк (до 180 строк за раз)\n" +
+            "Если готов предложить точечную правку прямо в SAF — используй <fs_patch path=\"...\"><old>точный фрагмент</old><new>новый код</new></fs_patch> или <fs_write path=\"...\">содержимое</fs_write> (DeepApk сначала сделает бэкап и даст кнопку подтверждения пользователю)."
+    }
+
+    private fun sanitizeRelPath(raw: String): String? {
+        val clean = raw.trim().replace('\\', '/').trimStart('/')
+        if (clean.isBlank()) return ""
+        val segs = clean.split('/').filter { it.isNotBlank() && it != "." }
+        if (segs.any { it == ".." || it.contains('\u0000') }) return null
+        return segs.joinToString("/")
+    }
+
+    private fun listChildren(ctx: Context, treeUri: Uri, parentDocId: String): List<DocEntry> {
+        val out = mutableListOf<DocEntry>()
+        val childUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        val proj = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE
+        )
+        try {
+            ctx.contentResolver.query(childUri, proj, null, null, null)?.use { c ->
+                val iId = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val iName = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val iMime = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val iSize = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+                while (c.moveToNext()) {
+                    val id = if (iId >= 0) c.getString(iId).orEmpty() else continue
+                    val name = if (iName >= 0) c.getString(iName).orEmpty() else continue
+                    val mime = if (iMime >= 0) c.getString(iMime).orEmpty() else ""
+                    val size = if (iSize >= 0 && !c.isNull(iSize)) c.getLong(iSize) else 0L
+                    out.add(DocEntry(id, name, mime == DocumentsContract.Document.MIME_TYPE_DIR, size))
+                }
+            }
+        } catch (_: Exception) {}
+        return out.sortedWith(compareBy<DocEntry> { !it.isDir }.thenBy { it.name.lowercase() })
+    }
+
+    private fun findDoc(ctx: Context, treeUri: Uri, relPath: String): DocEntry? {
+        val clean = sanitizeRelPath(relPath) ?: return null
+        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+        if (clean.isEmpty()) return DocEntry(rootId, getLabel(ctx), true, 0L)
+        var curId = rootId
+        var found: DocEntry? = null
+        for (seg in clean.split('/')) {
+            val children = listChildren(ctx, treeUri, curId)
+            val match = children.firstOrNull { it.name == seg }
+                ?: children.firstOrNull { it.name.equals(seg, ignoreCase = true) }
+                ?: return null
+            found = match
+            curId = match.docId
+        }
+        return found
+    }
+
+    private fun ensureFileDoc(ctx: Context, treeUri: Uri, relPath: String): Pair<DocEntry, Boolean>? {
+        val existing = findDoc(ctx, treeUri, relPath)
+        if (existing != null) return if (existing.isDir) null else (existing to true)
+        val clean = sanitizeRelPath(relPath)?.takeIf { it.isNotEmpty() } ?: return null
+        val segs = clean.split('/')
+        var curId = DocumentsContract.getTreeDocumentId(treeUri)
+        for (idx in 0 until segs.lastIndex) {
+            val dirName = segs[idx]
+            val children = listChildren(ctx, treeUri, curId)
+            val next = children.firstOrNull { it.isDir && it.name == dirName }
+            curId = if (next != null) {
+                next.docId
+            } else {
+                val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, curId)
+                val created = DocumentsContract.createDocument(
+                    ctx.contentResolver,
+                    parentUri,
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    dirName
+                ) ?: return null
+                DocumentsContract.getDocumentId(created)
+            }
+        }
+        val fileName = segs.last()
+        val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, curId)
+        val createdFile = DocumentsContract.createDocument(ctx.contentResolver, parentUri, "text/plain", fileName)
+            ?: return null
+        return DocEntry(DocumentsContract.getDocumentId(createdFile), fileName, false, 0L) to false
+    }
+
+    private fun readBytesDoc(ctx: Context, treeUri: Uri, docId: String): ByteArray? {
+        val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+        return ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+    }
+
+    private fun writeBytesDoc(ctx: Context, treeUri: Uri, docId: String, bytes: ByteArray): Boolean {
+        val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+        val os = try {
+            ctx.contentResolver.openOutputStream(uri, "wt")
+        } catch (_: Exception) {
+            try { ctx.contentResolver.openOutputStream(uri, "w") } catch (_: Exception) { null }
+        } ?: return false
+        os.use { it.write(bytes); it.flush() }
+        return true
+    }
+
+    private fun isTextFile(name: String, size: Long): Boolean {
+        if (size > 350_000L) return false
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return ext !in BINARY_EXTS
+    }
+
+    fun listTree(ctx: Context, relPath: String = "", maxEntries: Int = 180): String {
+        val treeUri = getTreeUri(ctx) ?: return "[SAF: папка проекта не подключена]"
+        val start = findDoc(ctx, treeUri, relPath) ?: return "[SAF: путь не найден: $relPath]"
+        if (!start.isDir) return "${sanitizeRelPath(relPath)} (${start.size} B)"
+        val out = mutableListOf<String>()
+        val basePrefix = sanitizeRelPath(relPath).orEmpty()
+
+        fun walk(docId: String, prefix: String) {
+            if (out.size >= maxEntries) return
+            for (c in listChildren(ctx, treeUri, docId)) {
+                if (out.size >= maxEntries) return
+                if (c.isDir && c.name in IGNORED_DIRS) continue
+                val full = if (prefix.isEmpty()) c.name else "$prefix/${c.name}"
+                if (c.isDir) {
+                    out.add("$full/")
+                    walk(c.docId, full)
+                } else {
+                    out.add("$full (${c.size} B)")
+                }
+            }
+        }
+        walk(start.docId, basePrefix)
+        if (out.isEmpty()) return "[Пусто]"
+        val suffix = if (out.size >= maxEntries) "\n... [показано первых $maxEntries элементов]" else ""
+        return out.joinToString("\n") + suffix
+    }
+
+    fun grepProject(ctx: Context, pattern: String, relPath: String = "", maxHits: Int = 45): String {
+        val treeUri = getTreeUri(ctx) ?: return "[SAF: папка проекта не подключена]"
+        if (pattern.isBlank()) return "[SAF: пустой шаблон поиска]"
+        val start = findDoc(ctx, treeUri, relPath) ?: return "[SAF: путь не найден: $relPath]"
+        val rx = try { Regex(pattern) } catch (_: Exception) { null }
+        val hits = mutableListOf<String>()
+        val basePrefix = sanitizeRelPath(relPath).orEmpty()
+
+        fun scanFile(docId: String, fullPath: String, name: String, size: Long) {
+            if (hits.size >= maxHits || !isTextFile(name, size)) return
+            val bytes = try { readBytesDoc(ctx, treeUri, docId) } catch (_: Exception) { null } ?: return
+            val lines = String(bytes, Charsets.UTF_8).replace("\r\n", "\n").split('\n')
+            for ((idx, line) in lines.withIndex()) {
+                if (hits.size >= maxHits) break
+                val matched = rx?.containsMatchIn(line) ?: line.contains(pattern, ignoreCase = true)
+                if (matched) {
+                    hits.add("$fullPath:${idx + 1}: ${line.trimEnd().take(180)}")
+                }
+            }
+        }
+
+        if (!start.isDir) {
+            scanFile(start.docId, basePrefix, start.name, start.size)
+        } else {
+            fun walk(docId: String, prefix: String) {
+                if (hits.size >= maxHits) return
+                for (c in listChildren(ctx, treeUri, docId)) {
+                    if (hits.size >= maxHits) break
+                    if (c.isDir && c.name in IGNORED_DIRS) continue
+                    val full = if (prefix.isEmpty()) c.name else "$prefix/${c.name}"
+                    if (c.isDir) walk(c.docId, full) else scanFile(c.docId, full, c.name, c.size)
+                }
+            }
+            walk(start.docId, basePrefix)
+        }
+        if (hits.isEmpty()) return "[Совпадений не найдено для: $pattern]"
+        val suffix = if (hits.size >= maxHits) "\n... [показано первых $maxHits совпадений]" else ""
+        return hits.joinToString("\n") + suffix
+    }
+
+    fun readFileLines(ctx: Context, relPath: String, start: Int = 1, end: Int = 150): String {
+        val treeUri = getTreeUri(ctx) ?: return "[SAF: папка проекта не подключена]"
+        val entry = findDoc(ctx, treeUri, relPath) ?: return "[SAF: файл не найден: $relPath]"
+        if (entry.isDir) return listTree(ctx, relPath)
+        if (!isTextFile(entry.name, entry.size)) return "[SAF: бинарный или слишком большой файл: $relPath (${entry.size} B)]"
+        val bytes = try { readBytesDoc(ctx, treeUri, entry.docId) } catch (_: Exception) { null }
+            ?: return "[SAF: ошибка чтения $relPath]"
+        val lines = String(bytes, Charsets.UTF_8).replace("\r\n", "\n").split('\n')
+        if (lines.isEmpty()) return "[Пустой файл: $relPath]"
+        val s = start.coerceIn(1, lines.size)
+        val e = end.coerceIn(s, (s + 179).coerceAtMost(lines.size))
+        val sb = StringBuilder("=== $relPath ($s..$e из ${lines.size}) ===\n")
+        for (i in s..e) {
+            sb.append(i).append(": ").append(lines[i - 1]).append('\n')
+        }
+        return sb.toString().trimEnd()
+    }
+
+    private fun parseAttrs(attrStr: String): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        val rx = Regex("""(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+        rx.findAll(attrStr).forEach { m ->
+            val k = m.groupValues[1].lowercase()
+            val v = m.groupValues[2].ifEmpty { m.groupValues[3] }
+            map[k] = v
+        }
+        return map
+    }
+
+    fun extractReadOps(text: String): List<FsReadOp> {
+        val ops = mutableListOf<Pair<Int, FsReadOp>>()
+        Regex("""<fs_tree([^>]*?)(?:/>|>[\s\S]*?</fs_tree>)""", RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
+            val attrs = parseAttrs(m.groupValues[1])
+            ops.add(m.range.first to FsReadOp.Tree(attrs["path"].orEmpty()))
+        }
+        Regex("""<fs_grep([^>]*?)(?:/>|>[\s\S]*?</fs_grep>)""", RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
+            val attrs = parseAttrs(m.groupValues[1])
+            val pat = attrs["pattern"].orEmpty()
+            if (pat.isNotBlank()) ops.add(m.range.first to FsReadOp.Grep(pat, attrs["path"].orEmpty()))
+        }
+        Regex("""<fs_read([^>]*?)(?:/>|>[\s\S]*?</fs_read>)""", RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
+            val attrs = parseAttrs(m.groupValues[1])
+            val p = attrs["path"].orEmpty()
+            val s = attrs["start"]?.toIntOrNull() ?: 1
+            val e = attrs["end"]?.toIntOrNull() ?: (s + 149)
+            if (p.isNotBlank()) ops.add(m.range.first to FsReadOp.Read(p, s, e))
+        }
+        return ops.sortedBy { it.first }.map { it.second }.take(4)
+    }
+
+    fun stripReadTags(text: String, summary: String): String {
+        var cleaned = text
+            .replace(Regex("""<fs_tree[^>]*?(?:/>|>[\s\S]*?</fs_tree>)""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""<fs_grep[^>]*?(?:/>|>[\s\S]*?</fs_grep>)""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""<fs_read[^>]*?(?:/>|>[\s\S]*?</fs_read>)""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\n{3,}"""), "\n\n")
+            .trim()
+        val note = "> 🔍 Запрос к проекту: $summary"
+        cleaned = if (cleaned.isBlank()) note else "$cleaned\n\n$note"
+        return cleaned
+    }
+
+    fun executeReadOps(ctx: Context, ops: List<FsReadOp>): Pair<String, String> {
+        val labels = mutableListOf<String>()
+        val body = StringBuilder()
+        ops.forEach { op ->
+            when (op) {
+                is FsReadOp.Tree -> {
+                    val p = op.path.ifBlank { "/" }
+                    labels.add("дерево $p")
+                    body.append("=== TREE ").append(p).append(" ===\n")
+                    body.append(listTree(ctx, op.path)).append("\n\n")
+                }
+                is FsReadOp.Grep -> {
+                    labels.add("поиск «${op.pattern.take(24)}»")
+                    body.append("=== GREP ").append(op.pattern).append(" ===\n")
+                    body.append(grepProject(ctx, op.pattern, op.path)).append("\n\n")
+                }
+                is FsReadOp.Read -> {
+                    val fName = op.path.substringAfterLast('/')
+                    labels.add("$fName (${op.start}..${op.end})")
+                    body.append(readFileLines(ctx, op.path, op.start, op.end)).append("\n\n")
+                }
+            }
+        }
+        val chipLabel = "📂 SAF: " + labels.joinToString(" · ").take(64)
+        val rawText = body.toString().trim()
+        val fence = if (rawText.contains("```")) "````" else "```"
+        val payload = "[Файл: $chipLabel]\n${fence}text\n$rawText\n$fence"
+        return chipLabel to payload
+    }
+
+    fun extractWriteOps(text: String): List<FsWriteOp> {
+        val out = mutableListOf<Pair<Int, FsWriteOp>>()
+        Regex("""<fs_patch([^>]*)>([\s\S]*?)</fs_patch>""", RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
+            val path = parseAttrs(m.groupValues[1])["path"].orEmpty().trim()
+            if (path.isNotBlank()) {
+                val inner = m.groupValues[2]
+                val pairs = Regex("""<old>([\s\S]*?)</old>\s*<new>([\s\S]*?)</new>""").findAll(inner)
+                    .map { pm -> pm.groupValues[1].trim('\r', '\n') to pm.groupValues[2].trim('\r', '\n') }
+                    .toList()
+                if (pairs.isNotEmpty()) out.add(m.range.first to FsWriteOp.Patch(path, pairs))
+            }
+        }
+        Regex("""<fs_write([^>]*)>([\s\S]*?)</fs_write>""", RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
+            val path = parseAttrs(m.groupValues[1])["path"].orEmpty().trim()
+            if (path.isNotBlank()) {
+                val body = m.groupValues[2].trim('\r', '\n')
+                out.add(m.range.first to FsWriteOp.Write(path, body))
+            }
+        }
+        return out.sortedBy { it.first }.map { it.second }
+    }
+
+    private fun backupDir(ctx: Context): File = File(ctx.filesDir, "fs_backups")
+    private fun backupIndexFile(ctx: Context): File = File(backupDir(ctx), "active.json")
+
+    fun activeBackupCount(ctx: Context): Int {
+        val f = backupIndexFile(ctx)
+        if (!f.exists()) return 0
+        return try { JSONArray(f.readText()).length() } catch (_: Exception) { 0 }
+    }
+
+    fun activeBackupFiles(ctx: Context): List<String> {
+        val f = backupIndexFile(ctx)
+        if (!f.exists()) return emptyList()
+        return try {
+            val arr = JSONArray(f.readText())
+            (0 until arr.length()).mapNotNull { arr.getJSONObject(it).optString("path").takeIf { p -> p.isNotBlank() } }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private fun countOccurrences(haystack: String, needle: String): Int {
+        if (needle.isEmpty()) return 0
+        var count = 0
+        var idx = 0
+        while (true) {
+            val found = haystack.indexOf(needle, idx)
+            if (found < 0) break
+            count++
+            idx = found + needle.length
+        }
+        return count
+    }
+
+    fun applyWithBackup(ctx: Context, ops: List<FsWriteOp>): FsApplyResult {
+        val treeUri = getTreeUri(ctx) ?: return FsApplyResult(false, "Папка проекта не подключена")
+        if (ops.isEmpty()) return FsApplyResult(false, "Нет операций для применения")
+
+        val staged = mutableListOf<Triple<String, DocEntry?, ByteArray>>()
+        val newContents = mutableMapOf<String, String>()
+
+        // 1. Dry-run & validate all anchors before touching a single file
+        for (op in ops) {
+            val cleanPath = sanitizeRelPath(op.path)?.takeIf { it.isNotEmpty() }
+                ?: return FsApplyResult(false, "Небезопасный путь: ${op.path}")
+            when (op) {
+                is FsWriteOp.Patch -> {
+                    val doc = findDoc(ctx, treeUri, cleanPath)
+                        ?: return FsApplyResult(false, "Файл не найден: $cleanPath")
+                    if (doc.isDir) return FsApplyResult(false, "Это папка: $cleanPath")
+                    val origBytes = readBytesDoc(ctx, treeUri, doc.docId)
+                        ?: return FsApplyResult(false, "Не удалось прочитать: $cleanPath")
+                    var curText = newContents[cleanPath] ?: String(origBytes, Charsets.UTF_8)
+                    val norm = curText.replace("\r\n", "\n")
+                    var working = norm
+                    for ((idx, pair) in op.replacements.withIndex()) {
+                        val oldNorm = pair.first.replace("\r\n", "\n")
+                        val newNorm = pair.second.replace("\r\n", "\n")
+                        val cnt = countOccurrences(working, oldNorm)
+                        if (cnt != 1) {
+                            return FsApplyResult(
+                                false,
+                                "Промах якоря #${idx + 1} в $cleanPath (совпадений: $cnt, нужно 1). Файлы НЕ тронуты."
+                            )
+                        }
+                        working = working.replaceFirst(oldNorm, newNorm)
+                    }
+                    newContents[cleanPath] = working
+                    if (staged.none { it.first == cleanPath }) staged.add(Triple(cleanPath, doc, origBytes))
+                }
+                is FsWriteOp.Write -> {
+                    val doc = findDoc(ctx, treeUri, cleanPath)
+                    val origBytes = if (doc != null && !doc.isDir) {
+                        readBytesDoc(ctx, treeUri, doc.docId) ?: ByteArray(0)
+                    } else ByteArray(0)
+                    newContents[cleanPath] = op.content.replace("\r\n", "\n")
+                    if (staged.none { it.first == cleanPath }) staged.add(Triple(cleanPath, doc, origBytes))
+                }
+            }
+        }
+
+        // 2. Save backups first (preserve earliest pre-session snapshot if active.json already exists)
+        val bDir = backupDir(ctx)
+        val bFilesDir = File(bDir, "files").apply { mkdirs() }
+        val arr = try {
+            val idxF = backupIndexFile(ctx)
+            if (idxF.exists()) JSONArray(idxF.readText()) else JSONArray()
+        } catch (_: Exception) { JSONArray() }
+        val alreadyBacked = (0 until arr.length()).mapNotNull { arr.getJSONObject(it).optString("path") }.toMutableSet()
+
+        staged.forEachIndexed { idx, (relPath, doc, origBytes) ->
+            if (relPath !in alreadyBacked) {
+                val bakFileName = "bak_${System.currentTimeMillis()}_$idx.bin"
+                val existed = doc != null
+                if (existed) File(bFilesDir, bakFileName).writeBytes(origBytes)
+                arr.put(
+                    JSONObject()
+                        .put("path", relPath)
+                        .put("existed", existed)
+                        .put("bak", bakFileName)
+                )
+                alreadyBacked.add(relPath)
+            }
+        }
+        backupIndexFile(ctx).writeText(arr.toString())
+
+        // 3. Apply changes
+        val applied = mutableListOf<String>()
+        for ((relPath, content) in newContents) {
+            val ensured = ensureFileDoc(ctx, treeUri, relPath)
+                ?: return FsApplyResult(false, "Не удалось создать/открыть: $relPath")
+            val ok = writeBytesDoc(ctx, treeUri, ensured.first.docId, content.toByteArray(Charsets.UTF_8))
+            if (!ok) return FsApplyResult(false, "Ошибка записи в SAF: $relPath")
+            applied.add(relPath)
+        }
+        return FsApplyResult(true, "Применено (${applied.size} файл.), бэкап сохранён", applied)
+    }
+
+    fun commitBackupOk(ctx: Context) {
+        backupDir(ctx).deleteRecursively()
+    }
+
+    fun rollbackBackup(ctx: Context): FsApplyResult {
+        val treeUri = getTreeUri(ctx) ?: return FsApplyResult(false, "Папка проекта не подключена")
+        val f = backupIndexFile(ctx)
+        if (!f.exists()) return FsApplyResult(false, "Активный бэкап не найден")
+        return try {
+            val arr = JSONArray(f.readText())
+            val bFilesDir = File(backupDir(ctx), "files")
+            val restored = mutableListOf<String>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val path = o.optString("path")
+                val existed = o.optBoolean("existed", true)
+                val bak = o.optString("bak")
+                val doc = findDoc(ctx, treeUri, path)
+                if (existed) {
+                    val bytes = File(bFilesDir, bak).takeIf { it.exists() }?.readBytes() ?: continue
+                    val target = doc ?: ensureFileDoc(ctx, treeUri, path)?.first ?: continue
+                    writeBytesDoc(ctx, treeUri, target.docId, bytes)
+                    restored.add(path)
+                } else if (doc != null) {
+                    val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, doc.docId)
+                    try { DocumentsContract.deleteDocument(ctx.contentResolver, uri) } catch (_: Exception) {}
+                    restored.add("$path (удалён)")
+                }
+            }
+            backupDir(ctx).deleteRecursively()
+            FsApplyResult(true, "Откат выполнен (${restored.size} файл.)", restored)
+        } catch (e: Exception) {
+            FsApplyResult(false, "Ошибка отката: ${e.message}")
+        }
+    }
+}

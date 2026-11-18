@@ -3,6 +3,7 @@ package com.garickbox.deepapk
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.util.TypedValue
 import android.view.ViewGroup
@@ -115,6 +116,8 @@ fun ChatScreen(
     isDark: Boolean,
     incomingShare: IncomingShare? = null,
     onConsumeShare: () -> Unit = {},
+    incomingSkill: SkillPackage? = null,
+    onConsumeSkill: () -> Unit = {},
     onOpenSettings: () -> Unit
 ) {
     val ctx = LocalContext.current
@@ -180,6 +183,22 @@ fun ChatScreen(
     var showPresetsDialog by remember { mutableStateOf(false) }
     var editingPreset by remember { mutableStateOf<PromptPreset?>(null) }
     var addSkillDraft by remember { mutableStateOf<String?>(null) }
+    var projectLabel by remember { mutableStateOf(ProjectFs.getLabel(ctx)) }
+    var projectAutoRead by remember { mutableStateOf(ProjectFs.isEnabled(ctx)) }
+    var backupFilesCount by remember { mutableStateOf(ProjectFs.activeBackupCount(ctx)) }
+    var pendingFsEdits by remember { mutableStateOf<List<FsWriteOp>>(emptyList()) }
+    var showProjectFsDialog by remember { mutableStateOf(false) }
+    val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            try {
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                ctx.contentResolver.takePersistableUriPermission(uri, flags)
+            } catch (_: Exception) {}
+            projectLabel = ProjectFs.saveTree(ctx, uri)
+            projectAutoRead = true
+            Toast.makeText(ctx, "Папка подключена: $projectLabel", Toast.LENGTH_SHORT).show()
+        }
+    }
     var sectorEnd by remember { mutableStateOf(messages.size) }
     var sectorStart by remember { mutableStateOf((messages.size - SECTOR_SIZE).coerceAtLeast(0)) }
 
@@ -295,7 +314,7 @@ fun ChatScreen(
         ChatStore.saveSessions(ctx, sessions.toList())
     }
 
-    fun startStream(continueTargetIdx: Int? = null, scrollAnchorIdx: Int? = null) {
+    fun startStream(continueTargetIdx: Int? = null, scrollAnchorIdx: Int? = null, toolDepth: Int = 0) {
         if (streaming) return
         error = ""
         searchInfo = ""
@@ -343,7 +362,10 @@ fun ChatScreen(
 
             val activePreset = presets.firstOrNull { it.id == activePresetId } ?: presets.first()
             val extraGlobal = if (settings.systemPrompt.trim() == AppSettings.DEFAULT_SYSTEM_PROMPT.trim()) "" else settings.systemPrompt.trim()
-            val effectiveSettings = settings.copy(systemPrompt = activePreset.buildSystemPrompt(extraGlobal))
+            val fsAdd = if (projectAutoRead && ProjectFs.isReady(ctx)) ProjectFs.systemPromptAddendum(ctx) else ""
+            val combinedExtra = listOf(extraGlobal, fsAdd).filter { it.isNotBlank() }.joinToString("\n\n")
+            val effectiveSettings = settings.copy(systemPrompt = activePreset.buildSystemPrompt(combinedExtra))
+            var wasCancelled = false
             try {
                 DeepSeekApi.chatStream(
                     settings = effectiveSettings,
@@ -377,6 +399,7 @@ fun ChatScreen(
                     }
                 }
             } catch (_: CancellationException) {
+                wasCancelled = true
                 flushDeltas(true)
             } catch (e: Exception) {
                 flushDeltas(true)
@@ -398,6 +421,7 @@ fun ChatScreen(
                     }
                 }
                 val last = messages.getOrNull(targetIdx)
+                var nextAutoReadPayload: String? = null
                 if (continueTargetIdx == null && last != null && last.content.isBlank() && last.reasoning.isBlank()) {
                     messages.removeAt(targetIdx)
                 } else if (last != null && last.content.isNotBlank()) {
@@ -409,10 +433,25 @@ fun ChatScreen(
                             withContext(Dispatchers.IO) { DocxEngine.saveHtmlSilently(ctx, t, h) }
                         }
                     }
+                    val writeOps = ProjectFs.extractWriteOps(last.content)
+                    if (writeOps.isNotEmpty()) pendingFsEdits = writeOps
+                    if (!wasCancelled && continueTargetIdx == null && projectAutoRead && ProjectFs.isReady(ctx) && toolDepth < 4) {
+                        val readOps = ProjectFs.extractReadOps(last.content)
+                        if (readOps.isNotEmpty()) {
+                            val (summary, payload) = withContext(Dispatchers.IO) { ProjectFs.executeReadOps(ctx, readOps) }
+                            messages[targetIdx] = last.copy(content = ProjectFs.stripReadTags(last.content, summary))
+                            nextAutoReadPayload = payload
+                        }
+                    }
                 }
                 persistCurrentSession()
                 streaming = false
                 streamJob = null
+                if (nextAutoReadPayload != null) {
+                    messages.add(Message(role = "user", content = nextAutoReadPayload))
+                    persistCurrentSession()
+                    scope.launch { startStream(scrollAnchorIdx = messages.size - 1, toolDepth = toolDepth + 1) }
+                }
             }
         }
     }
@@ -697,25 +736,56 @@ fun ChatScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Row(
-                            modifier = Modifier
-                                .padding(top = 2.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(
-                                    if (topPreset.id != "default") DeepSeekBlue.copy(alpha = if (isDark) 0.22f else 0.11f)
-                                    else MaterialTheme.colorScheme.surface
-                                )
-                                .clickable { if (!streaming) showPresetsDialog = true }
-                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.padding(top = 2.dp).horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "${topPreset.emoji} ${topPreset.name} ▾",
-                                fontSize = 11.5.sp,
-                                fontWeight = if (topPreset.id != "default") FontWeight.SemiBold else FontWeight.Medium,
-                                color = if (topPreset.id != "default") DeepSeekBlue else MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (topPreset.id != "default") DeepSeekBlue.copy(alpha = if (isDark) 0.22f else 0.11f)
+                                        else MaterialTheme.colorScheme.surface
+                                    )
+                                    .clickable { if (!streaming) showPresetsDialog = true }
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${topPreset.emoji} ${topPreset.name} ▾",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = if (topPreset.id != "default") FontWeight.SemiBold else FontWeight.Medium,
+                                    color = if (topPreset.id != "default") DeepSeekBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            val safConnected = projectLabel.isNotBlank() && ProjectFs.isReady(ctx)
+                            val safOn = safConnected && projectAutoRead
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (safOn) DeepSeekBlue.copy(alpha = if (isDark) 0.22f else 0.11f)
+                                        else MaterialTheme.colorScheme.surface
+                                    )
+                                    .clickable {
+                                        if (!streaming) {
+                                            if (!safConnected) treePicker.launch(null) else showProjectFsDialog = true
+                                        }
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (safConnected) "📂 ${projectLabel.take(14)}" + (if (safOn) " · ВКЛ" else " · ВЫКЛ") else "📂 Папка",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = if (safOn) FontWeight.SemiBold else FontWeight.Medium,
+                                    color = if (safOn) DeepSeekBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
 
@@ -753,6 +823,93 @@ fun ChatScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Text("+", fontSize = 18.sp, fontWeight = FontWeight.Medium, color = barIconColor)
+                    }
+                }
+
+                if (backupFilesCount > 0) {
+                    Surface(
+                        color = if (isDark) Color(0xFF2B2518) else Color(0xFFFFF8E1),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 3.dp),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "🛡 Бэкап активен ($backupFilesCount файл.)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isDark) Color(0xFFFFD54F) else Color(0xFF7A4F01),
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = {
+                                    ProjectFs.commitBackupOk(ctx)
+                                    backupFilesCount = 0
+                                    Toast.makeText(ctx, "Бэкап удалён", Toast.LENGTH_SHORT).show()
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                            ) { Text("✅ ОК", fontSize = 12.sp, color = Color(0xFF2E7D32)) }
+                            TextButton(
+                                onClick = {
+                                    scope.launch {
+                                        val res = withContext(Dispatchers.IO) { ProjectFs.rollbackBackup(ctx) }
+                                        backupFilesCount = ProjectFs.activeBackupCount(ctx)
+                                        Toast.makeText(ctx, res.message, Toast.LENGTH_SHORT).show()
+                                        if (res.ok && input.isBlank()) {
+                                            input = "Правка не прошла проверку — я откатил изменения (${res.modifiedFiles.joinToString(", ")}). Ниже ошибка сборки/работы, подумай и предложи исправленный вариант:\n"
+                                        }
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                            ) { Text("↩️ Откат", fontSize = 12.sp, color = Color(0xFFC62828)) }
+                        }
+                    }
+                }
+
+                if (pendingFsEdits.isNotEmpty()) {
+                    Surface(
+                        color = if (isDark) Color(0xFF1A2236) else Color(0xFFEEF3FF),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 3.dp),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val filesSummary = pendingFsEdits.joinToString(", ") { it.path.substringAfterLast('/') }
+                            Text(
+                                "✏️ Правки SAF: $filesSummary",
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Button(
+                                onClick = {
+                                    val ops = pendingFsEdits
+                                    scope.launch {
+                                        val res = withContext(Dispatchers.IO) { ProjectFs.applyWithBackup(ctx, ops) }
+                                        backupFilesCount = ProjectFs.activeBackupCount(ctx)
+                                        if (res.ok) {
+                                            pendingFsEdits = emptyList()
+                                            Toast.makeText(ctx, res.message, Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            error = res.message
+                                        }
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            ) { Text("💾 Бэкап+Применить", fontSize = 11.5.sp) }
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "✕",
+                                fontSize = 14.sp,
+                                modifier = Modifier.clickable { pendingFsEdits = emptyList() }.padding(6.dp)
+                            )
+                        }
                     }
                 }
 
@@ -1769,8 +1926,17 @@ fun ChatScreen(
                 try {
                     val text = ctx.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty().trim()
                     if (text.isNotBlank()) {
-                        ePrompt = text
-                        Toast.makeText(ctx, "Загружено ${text.length} симв.", Toast.LENGTH_SHORT).show()
+                        val parsed = parseSkillJsonOrText(text, uri.lastPathSegment?.substringAfterLast('/').orEmpty())
+                        if (parsed != null) {
+                            eEmoji = parsed.emoji
+                            eName = parsed.name
+                            ePrompt = parsed.prompt
+                            if (parsed.learnedSkill.isNotBlank()) eSkill = parsed.learnedSkill
+                            Toast.makeText(ctx, "Загружен скилл «${parsed.name}»", Toast.LENGTH_SHORT).show()
+                        } else {
+                            ePrompt = text
+                            Toast.makeText(ctx, "Загружено ${text.length} симв.", Toast.LENGTH_SHORT).show()
+                        }
                     } else {
                         Toast.makeText(ctx, "Файл пустой", Toast.LENGTH_SHORT).show()
                     }
@@ -1823,6 +1989,19 @@ fun ChatScreen(
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                             shape = RoundedCornerShape(10.dp)
                         ) { Text("📂 Из файла", fontSize = 12.sp) }
+                        OutlinedButton(
+                            onClick = {
+                                val cur = ep.copy(
+                                    emoji = eEmoji.ifBlank { "⭐" },
+                                    name = eName.ifBlank { "Заготовка" },
+                                    prompt = ePrompt,
+                                    learnedSkill = eSkill
+                                )
+                                sharePresetAsDeepApk(ctx, cur)
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) { Text("📤 .deepapk", fontSize = 12.sp) }
                     }
                     Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
@@ -1883,6 +2062,148 @@ fun ChatScreen(
                             },
                             shape = RoundedCornerShape(10.dp)
                         ) { Text("Сохранить") }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showProjectFsDialog) {
+        Dialog(onDismissRequest = { showProjectFsDialog = false }) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (isDark) Color(0xFF1F2229) else Color.White,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("📂 Проект SAF: $projectLabel", fontSize = 16.5.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text("Авто-чтение кода для ИИ", fontSize = 14.sp, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = projectAutoRead,
+                            onCheckedChange = {
+                                projectAutoRead = it
+                                ProjectFs.setEnabled(ctx, it)
+                            }
+                        )
+                    }
+                    if (backupFilesCount > 0) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Активный бэкап: ${ProjectFs.activeBackupFiles(ctx).joinToString(", ")}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                showProjectFsDialog = false
+                                treePicker.launch(null)
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) { Text("Сменить папку", fontSize = 12.5.sp) }
+                        TextButton(onClick = {
+                            ProjectFs.clearTree(ctx)
+                            projectLabel = ""
+                            projectAutoRead = false
+                            showProjectFsDialog = false
+                        }) { Text("Отключить", color = Color(0xFFE53935), fontSize = 12.5.sp) }
+                    }
+                }
+            }
+        }
+    }
+
+    // Incoming .deepapk Skill Package Installer Dialog
+    incomingSkill?.let { pkg ->
+        val existing = presets.firstOrNull { it.id == pkg.id }
+        var keepExistingSkill by remember(pkg.id) { mutableStateOf(true) }
+        fun installSkill(switchAndNewChat: Boolean) {
+            val list = presets.toMutableList()
+            val mergedLearned = when {
+                existing != null && keepExistingSkill && existing.learnedSkill.isNotBlank() -> existing.learnedSkill
+                pkg.learnedSkill.isNotBlank() -> pkg.learnedSkill
+                else -> ""
+            }
+            val updated = PromptPreset(
+                id = pkg.id,
+                name = pkg.name,
+                emoji = pkg.emoji,
+                prompt = pkg.prompt,
+                learnedSkill = mergedLearned,
+                isBuiltIn = existing?.isBuiltIn ?: false
+            )
+            val idx = list.indexOfFirst { it.id == pkg.id }
+            if (idx >= 0) list[idx] = updated else list.add(updated)
+            PresetStore.save(ctx, list)
+            presets = PresetStore.load(ctx)
+            if (switchAndNewChat) {
+                val s = ChatSession(
+                    id = System.currentTimeMillis().toString(),
+                    title = "Новый чат",
+                    updatedAt = System.currentTimeMillis(),
+                    messages = emptyList(),
+                    presetId = updated.id
+                )
+                sessions.add(0, s)
+                switchSession(s)
+                setChatPreset(updated.id)
+                ChatStore.saveSessions(ctx, sessions.toList())
+            } else {
+                setChatPreset(updated.id)
+            }
+            Toast.makeText(ctx, "Скилл «${updated.name}» сохранён", Toast.LENGTH_SHORT).show()
+            onConsumeSkill()
+        }
+        Dialog(onDismissRequest = onConsumeSkill) {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = if (isDark) Color(0xFF1F2229) else Color.White,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("${pkg.emoji} ${pkg.name}", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        (if (existing != null) "Обновить существующий скилл" else "Новый скилл .deepapk") +
+                            " · ${pkg.prompt.length} симв.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            pkg.prompt.take(260),
+                            fontSize = 12.sp,
+                            maxLines = 5,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                    if (existing != null && existing.learnedSkill.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = keepExistingSkill, onCheckedChange = { keepExistingSkill = it })
+                            Text("Сохранить накопленные правила (🧠)", fontSize = 12.5.sp)
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = onConsumeSkill) { Text("Отмена") }
+                        Spacer(Modifier.weight(1f))
+                        OutlinedButton(
+                            onClick = { installSkill(false) },
+                            shape = RoundedCornerShape(10.dp)
+                        ) { Text("Сохранить", fontSize = 12.5.sp) }
+                        Button(
+                            onClick = { installSkill(true) },
+                            shape = RoundedCornerShape(10.dp)
+                        ) { Text("В новый чат", fontSize = 12.5.sp) }
                     }
                 }
             }
