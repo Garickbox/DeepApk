@@ -178,7 +178,7 @@ object DocxEngine {
         return out
     }
 
-    private fun inlineRunsFromTokens(tokens: List<HToken>, baseSzHalfPt: String? = null, forceBold: Boolean = false): String {
+    private fun inlineRunsFromTokens(tokens: List<HToken>, baseSzHalfPt: String? = null, forceBold: Boolean = false, forceCaps: Boolean = false): String {
         val sb = StringBuilder()
         var b = if (forceBold) 1 else 0
         var itl = 0
@@ -195,6 +195,7 @@ object DocxEngine {
             if (u > 0) p.append("<w:u w:val=\"single\"/>")
             if (sub > 0) p.append("<w:vertAlign w:val=\"subscript\"/>")
             else if (sup > 0) p.append("<w:vertAlign w:val=\"superscript\"/>")
+            if (forceCaps) p.append("<w:caps/>")
             if (fill > 0) p.append("<w:highlight w:val=\"yellow\"/>")
             if (baseSzHalfPt != null) p.append("<w:sz w:val=\"$baseSzHalfPt\"/><w:szCs w:val=\"$baseSzHalfPt\"/>")
             return if (p.isEmpty()) "" else "<w:rPr>$p</w:rPr>"
@@ -358,7 +359,7 @@ object DocxEngine {
                     when (tk.tag) {
                         "div" -> {
                             if (Regex("\\bpagebreak\\b").containsMatchIn(cls)) {
-                                bodyXml.append("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>")
+                                bodyXml.append("<w:p><w:pPr><w:rPr><w:sz w:val=\"2\"/><w:szCs w:val=\"2\"/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val=\"2\"/><w:szCs w:val=\"2\"/></w:rPr><w:br w:type=\"page\"/></w:r></w:p>")
                                 val (_, next) = collectUntil("div", i + 1)
                                 i = next
                             } else {
@@ -368,10 +369,8 @@ object DocxEngine {
                         "h1", "h2", "h3" -> {
                             val (inner, next) = collectUntil(tk.tag, i + 1)
                             val jc = if (tk.tag == "h3" && !cls.contains("center")) "left" else "center"
-                            val caps = tk.tag == "h1"
-                            val runs = inlineRunsFromTokens(inner, "28", forceBold = true)
+                            val runs = inlineRunsFromTokens(inner, "28", forceBold = true, forceCaps = (tk.tag == "h1"))
                             bodyXml.append("<w:p><w:pPr><w:keepNext/><w:jc w:val=\"$jc\"/><w:spacing w:before=\"240\" w:after=\"120\"/><w:ind w:firstLine=\"0\"/></w:pPr>$runs</w:p>")
-                            if (caps) {}
                             i = next
                         }
                         "p" -> {
@@ -406,7 +405,7 @@ object DocxEngine {
                                 val jc = when {
                                     cls.contains("center") || cls.contains("formula") -> "center"
                                     cls.contains("right") -> "right"
-                                    else -> "both"
+                                    else -> "left"
                                 }
                                 val ind = if (isNoInd) "0" else "709"
                                 val runs = inlineRunsFromTokens(inner)
@@ -422,7 +421,7 @@ object DocxEngine {
                             val (inner, next) = collectUntil("li", i + 1)
                             val numId = if (listOrdered) "1" else "2"
                             val runs = inlineRunsFromTokens(inner)
-                            bodyXml.append("<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"$numId\"/></w:numPr><w:ind w:left=\"1080\" w:hanging=\"360\"/><w:jc w:val=\"both\"/></w:pPr>$runs</w:p>")
+                            bodyXml.append("<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"$numId\"/></w:numPr><w:ind w:left=\"1080\" w:hanging=\"360\"/><w:jc w:val=\"left\"/></w:pPr>$runs</w:p>")
                             i = next
                         }
                         "table" -> {
@@ -438,7 +437,7 @@ object DocxEngine {
         }
 
         val docXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
 <w:body>$bodyXml<w:sectPr><w:footerReference w:type="default" r:id="rIdFooter"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="850" w:bottom="1134" w:left="1701" w:header="708" w:footer="708" w:gutter="0"/><w:docGrid w:linePitch="360"/></w:sectPr></w:body></w:document>"""
 
         val imgRels = images.indices.joinToString("") { idx ->
@@ -471,7 +470,7 @@ $imgRels</Relationships>"""
         val stylesXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="28"/><w:szCs w:val="28"/><w:lang w:val="ru-RU"/></w:rPr></w:rPrDefault>
-<w:pPrDefault><w:pPr><w:spacing w:line="360" w:lineRule="auto" w:before="0" w:after="0"/><w:jc w:val="both"/></w:pPr></w:pPrDefault></w:docDefaults>
+<w:pPrDefault><w:pPr><w:spacing w:line="360" w:lineRule="auto" w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr></w:pPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
 </w:styles>"""
 
@@ -513,14 +512,14 @@ $imgRels</Relationships>"""
     private fun buildTableXml(tokens: List<HToken>): String {
         val sb = StringBuilder()
         sb.append(
-            "<w:tbl><w:tblPr><w:tblW w:w=\"9355\" w:type=\"dxa\"/><w:tblBorders>" +
+            "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblBorders>" +
                 "<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"000000\"/>" +
                 "<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"000000\"/>" +
                 "<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"000000\"/>" +
                 "<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"000000\"/>" +
                 "<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"000000\"/>" +
                 "<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"000000\"/>" +
-                "</w:tblBorders><w:tblCellMar><w:top w:w=\"40\" w:type=\"dxa\"/><w:left w:w=\"70\" w:type=\"dxa\"/><w:bottom w:w=\"40\" w:type=\"dxa\"/><w:right w:w=\"70\" w:type=\"dxa\"/></w:tblCellMar></w:tblPr>"
+                "</w:tblBorders><w:tblLayout w:type=\"autofit\"/><w:tblCellMar><w:top w:w=\"40\" w:type=\"dxa\"/><w:left w:w=\"70\" w:type=\"dxa\"/><w:bottom w:w=\"40\" w:type=\"dxa\"/><w:right w:w=\"70\" w:type=\"dxa\"/></w:tblCellMar></w:tblPr>"
         )
         var i = 0
         while (i < tokens.size) {
@@ -542,19 +541,57 @@ $imgRels</Relationships>"""
                             cellBuf.add(sub)
                             i++
                         }
-                        val runs = inlineRunsFromTokens(cellBuf, "22", forceBold = isTh)
+                        val runs = inlineRunsFromTokens(cellBuf, "24", forceBold = isTh)
                         val jc = if (isCenter) "center" else "left"
-                        sb.append("<w:tc><w:tcPr><w:vAlign w:val=\"top\"/></w:tcPr><w:p><w:pPr><w:spacing w:line=\"240\" w:lineRule=\"auto\"/><w:ind w:firstLine=\"0\"/><w:jc w:val=\"$jc\"/></w:pPr>$runs</w:p></w:tc>")
+                        sb.append("<w:tc><w:tcPr><w:vAlign w:val=\"top\"/></w:tcPr><w:p><w:pPr><w:spacing w:line=\"240\" w:lineRule=\"auto\" w:before=\"0\" w:after=\"0\"/><w:ind w:firstLine=\"0\"/><w:jc w:val=\"$jc\"/><w:rPr><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr>$runs</w:p></w:tc>")
                     } else i++
                 }
                 sb.append("</w:tr>")
             } else i++
         }
-        sb.append("</w:tbl><w:p><w:pPr><w:ind w:firstLine=\"0\"/></w:pPr></w:p>")
+        sb.append("</w:tbl><w:p><w:pPr><w:ind w:firstLine=\"0\"/><w:rPr><w:sz w:val=\"2\"/><w:szCs w:val=\"2\"/></w:rPr></w:pPr></w:p>")
         return sb.toString()
     }
 
+    fun extractStandaloneHtmlPage(content: String): Pair<String, String>? {
+        val rx = Regex("```(?:html|htm)\\s*\\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+        for (m in rx.findAll(content)) {
+            val code = m.groupValues[1].trim()
+            if (code.contains("<!doctype", ignoreCase = true) || code.contains("<html", ignoreCase = true) || code.contains("<body", ignoreCase = true)) {
+                val t = Regex("<title>([\\s\\S]*?)</title>", RegexOption.IGNORE_CASE).find(code)?.groupValues?.get(1)?.trim().orEmpty().ifBlank { "Работа" }
+                return t to code
+            }
+        }
+        return null
+    }
+
+    fun saveHtmlSilently(ctx: Context, title: String, html: String): File? {
+        return try {
+            val base = title.replace(Regex("[^\\wа-яА-ЯёЁ._-]"), "_").trim('_').take(50).ifBlank { "document" }
+            val hash = (html.hashCode() and 0xFFFF).toString(16)
+            val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
+            File(dir, "${base}_$hash.html").apply { writeText(html, Charsets.UTF_8) }
+        } catch (_: Exception) { null }
+    }
+
+    fun openHtmlInBrowser(ctx: Context, title: String, html: String) {
+        val f = saveHtmlSilently(ctx, title, html) ?: return
+        try {
+            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f)
+            val i = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "text/html")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(Intent.createChooser(i, "Открыть в браузере"))
+        } catch (e: Exception) {
+            Toast.makeText(ctx, "Нет браузера для открытия HTML: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun buildPreviewHtml(report: ParsedDocReport): String {
+        if (report.rawSource.contains("<!doctype", ignoreCase = true) || report.rawSource.contains("<html", ignoreCase = true)) {
+            return report.rawSource
+        }
         val safeTitle = report.title.replace("<", "&lt;").replace(">", "&gt;")
         return """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>$safeTitle</title>
 <style>:root{--page-w:210mm;}html,body{margin:0;padding:0;background:#e8eaed;font-family:'Times New Roman',Times,serif;}

@@ -58,6 +58,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 private sealed class ChatFeedItem(val key: String) {
@@ -363,6 +364,15 @@ fun ChatScreen(
                 val last = messages.getOrNull(targetIdx)
                 if (continueTargetIdx == null && last != null && last.content.isBlank() && last.reasoning.isBlank()) {
                     messages.removeAt(targetIdx)
+                } else if (last != null && last.content.isNotBlank()) {
+                    val docRep = extractDocReport(last.content)
+                    if (docRep != null && docRep.isComplete) {
+                        withContext(Dispatchers.IO) { DocxEngine.saveHtmlSilently(ctx, docRep.title, DocxEngine.buildPreviewHtml(docRep)) }
+                    } else {
+                        DocxEngine.extractStandaloneHtmlPage(last.content)?.let { (t, h) ->
+                            withContext(Dispatchers.IO) { DocxEngine.saveHtmlSilently(ctx, t, h) }
+                        }
+                    }
                 }
                 persistCurrentSession()
                 streaming = false
@@ -641,14 +651,37 @@ fun ChatScreen(
                     }
 
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = activeTitle,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    val topPreset = presets.firstOrNull { it.id == activePresetId } ?: presets.first()
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = activeTitle,
+                            fontSize = 15.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Row(
+                            modifier = Modifier
+                                .padding(top = 2.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (topPreset.id != "default") DeepSeekBlue.copy(alpha = if (isDark) 0.22f else 0.11f)
+                                    else MaterialTheme.colorScheme.surface
+                                )
+                                .clickable { if (!streaming) showPresetsDialog = true }
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${topPreset.emoji} ${topPreset.name} ▾",
+                                fontSize = 11.5.sp,
+                                fontWeight = if (topPreset.id != "default") FontWeight.SemiBold else FontWeight.Medium,
+                                color = if (topPreset.id != "default") DeepSeekBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
 
                     // Quick 1-tap provider switch (DeepSeek / Gemini)
                     Surface(
@@ -746,12 +779,19 @@ fun ChatScreen(
                                         add(ChatFeedItem.UserBubble(i, msg))
                                     } else {
                                         if (msg.reasoning.isNotBlank()) add(ChatFeedItem.AssistantReasoning(i, msg))
+                                        val stripped = stripDocReportForMarkdown(msg.content)
+                                        val docRep = extractDocReport(msg.content)
                                         if (msg.content.isBlank() && streaming && i == messages.size - 1) {
                                             add(ChatFeedItem.AssistantPending(i, msg))
                                         } else {
-                                            val blocks = parseMarkdownBlocksCached(msg.content)
-                                            blocks.forEachIndexed { bIdx, b ->
-                                                add(ChatFeedItem.AssistantBlock(i, msg, bIdx, b))
+                                            if (stripped.isNotBlank()) {
+                                                val blocks = parseMarkdownBlocksCached(stripped)
+                                                blocks.forEachIndexed { bIdx, b ->
+                                                    add(ChatFeedItem.AssistantBlock(i, msg, bIdx, b))
+                                                }
+                                            }
+                                            if (docRep != null && !docRep.isComplete) {
+                                                add(ChatFeedItem.AssistantBlock(i, msg, 9000, MdBlock.Paragraph("📄 Генерирую документ «${docRep.title}» (${msg.content.length} симв.)…")))
                                             }
                                         }
                                         if (msg.content.isNotBlank() && !(streaming && i == messages.size - 1)) {
@@ -874,13 +914,95 @@ fun ChatScreen(
                                                 fontSizeSp = settings.fontSizeSp,
                                                 onCopyCode = { _, code -> copyPlain(ctx, code, "Код скопирован") },
                                                 onCopyTermux = { lang, code -> TermuxBridge.sendCodeToTermux(ctx, lang, code) },
-                                                onCopyTable = { txt, toast -> copyPlain(ctx, txt, toast) }
+                                                onCopyTable = { txt, toast -> copyPlain(ctx, txt, toast) },
+                                                onOpenHtml = { raw ->
+                                                    val page = if (raw.contains("<html", true) || raw.contains("<!doctype", true)) raw
+                                                    else "<!DOCTYPE html><html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><body style=\"margin:14px;background:#fff;\">$raw</body></html>"
+                                                    DocxEngine.openHtmlInBrowser(ctx, "work", page)
+                                                }
                                             )
                                         }
                                     }
                                     is ChatFeedItem.AssistantFooter -> {
                                         val m = item.msg
                                         val idx = item.msgIdx
+                                        val docRep = remember(m.content) { extractDocReport(m.content) }
+                                        val htmlWork = remember(m.content, docRep) {
+                                            if (docRep == null) DocxEngine.extractStandaloneHtmlPage(m.content) else null
+                                        }
+                                        var buildingDocx by remember(m.id) { mutableStateOf(false) }
+                                        if (docRep != null && docRep.isComplete) {
+                                            Surface(
+                                                shape = RoundedCornerShape(14.dp),
+                                                color = MaterialTheme.colorScheme.surface,
+                                                border = BorderStroke(1.dp, DeepSeekBlue.copy(alpha = 0.35f)),
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                            ) {
+                                                Column(Modifier.padding(12.dp)) {
+                                                    Text("📄 ${docRep.title}.docx", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+                                                    Text(
+                                                        "ГОСТ А4 · Таблиц: ${docRep.tablesCount} · Рисунков: ${docRep.svgCount}",
+                                                        fontSize = 12.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    Spacer(Modifier.height(10.dp))
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                        OutlinedButton(
+                                                            onClick = { DocxEngine.openHtmlInBrowser(ctx, docRep.title, DocxEngine.buildPreviewHtml(docRep)) },
+                                                            shape = RoundedCornerShape(10.dp),
+                                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                                            modifier = Modifier.weight(1f)
+                                                        ) { Text("🌐 Посмотреть", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                                        Button(
+                                                            enabled = !buildingDocx,
+                                                            onClick = {
+                                                                buildingDocx = true
+                                                                scope.launch {
+                                                                    val bytes = withContext(Dispatchers.Default) { DocxEngine.buildDocxBytes(ctx, docRep) }
+                                                                    val mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                                                    val uri = DocxEngine.saveExportAndNotify(ctx, "${docRep.title}.docx", mime, bytes)
+                                                                    buildingDocx = false
+                                                                    if (uri != null) DocxEngine.openUri(ctx, uri, mime)
+                                                                }
+                                                            },
+                                                            shape = RoundedCornerShape(10.dp),
+                                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                                            modifier = Modifier.weight(1f)
+                                                        ) { Text(if (buildingDocx) "⏳ Сборка…" else "📥 Скачать .docx", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                                    }
+                                                }
+                                            }
+                                        } else if (htmlWork != null) {
+                                            Surface(
+                                                shape = RoundedCornerShape(14.dp),
+                                                color = MaterialTheme.colorScheme.surface,
+                                                border = BorderStroke(1.dp, DeepSeekBlue.copy(alpha = 0.35f)),
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                            ) {
+                                                Column(Modifier.padding(12.dp)) {
+                                                    Text("🌐 Готовая работа: ${htmlWork.first}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                                    Text("HTML-файл сохранён — откройте в браузере", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    Spacer(Modifier.height(8.dp))
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                        Button(
+                                                            onClick = { DocxEngine.openHtmlInBrowser(ctx, htmlWork.first, htmlWork.second) },
+                                                            shape = RoundedCornerShape(10.dp),
+                                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                                            modifier = Modifier.weight(1f)
+                                                        ) { Text("🌐 Посмотреть работу", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                                        OutlinedButton(
+                                                            onClick = {
+                                                                scope.launch {
+                                                                    DocxEngine.saveExportAndNotify(ctx, "${htmlWork.first}.html", "text/html", htmlWork.second.toByteArray(Charsets.UTF_8))
+                                                                }
+                                                            },
+                                                            shape = RoundedCornerShape(10.dp),
+                                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                                        ) { Text("📥 HTML", fontSize = 12.sp) }
+                                                    }
+                                                }
+                                            }
+                                        }
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -995,7 +1117,14 @@ fun ChatScreen(
                                 .size(38.dp)
                                 .clip(CircleShape)
                                 .clickable {
-                                    scope.launch { listState.animateScrollToItem(messages.size) }
+                                    scope.launch {
+                                        val jumped = sectorEnd < messages.size
+                                        sectorEnd = messages.size
+                                        sectorStart = (messages.size - SECTOR_SIZE).coerceAtLeast(0)
+                                        if (jumped) delay(60)
+                                        val lastIdx = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                                        listState.animateScrollToItem(lastIdx)
+                                    }
                                 }
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -1079,47 +1208,32 @@ fun ChatScreen(
                     )
 
                     Spacer(Modifier.height(12.dp))
-                    val curPreset = presets.firstOrNull { it.id == activePresetId } ?: presets.first()
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .horizontalScroll(rememberScrollState()),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            ModePill(
-                                label = "⚛ Рассуждение",
-                                active = settings.thinkingEnabled,
-                                isDark = isDark,
-                                onClick = {
-                                    val updated = settings.copy(thinkingEnabled = !settings.thinkingEnabled)
-                                    settings = updated
-                                    SettingsStore.save(ctx, updated)
-                                }
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            ModePill(
-                                label = "🌐 Поиск",
-                                active = settings.webSearchEnabled,
-                                isDark = isDark,
-                                onClick = {
-                                    val updated = settings.copy(webSearchEnabled = !settings.webSearchEnabled)
-                                    settings = updated
-                                    SettingsStore.save(ctx, updated)
-                                }
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            ModePill(
-                                label = "${curPreset.emoji} ${curPreset.name} ▾",
-                                active = curPreset.id != "default",
-                                isDark = isDark,
-                                onClick = { showPresetsDialog = true }
-                            )
-                        }
+                        ModePill(
+                            label = "⚛ Рассуждение",
+                            active = settings.thinkingEnabled,
+                            isDark = isDark,
+                            onClick = {
+                                val updated = settings.copy(thinkingEnabled = !settings.thinkingEnabled)
+                                settings = updated
+                                SettingsStore.save(ctx, updated)
+                            }
+                        )
                         Spacer(Modifier.width(8.dp))
+                        ModePill(
+                            label = "🌐 Поиск",
+                            active = settings.webSearchEnabled,
+                            isDark = isDark,
+                            onClick = {
+                                val updated = settings.copy(webSearchEnabled = !settings.webSearchEnabled)
+                                settings = updated
+                                SettingsStore.save(ctx, updated)
+                            }
+                        )
+                        Spacer(Modifier.weight(1f))
 
                         Box(
                             modifier = Modifier
@@ -1506,7 +1620,7 @@ fun ChatScreen(
                                             Text("🧠", fontSize = 12.sp)
                                         }
                                     }
-                                    val preview = p.prompt.ifBlank { "Чистые ответы без кода и Termux" }
+                                    val preview = p.prompt.lineSequence().firstOrNull { it.isNotBlank() && !it.startsWith("#") }?.take(85) ?: "Чистые нейтральные ответы"
                                     Text(
                                         preview,
                                         fontSize = 12.sp,
@@ -1544,6 +1658,21 @@ fun ChatScreen(
         var ePrompt by remember(ep.id) { mutableStateOf(ep.prompt) }
         var eSkill by remember(ep.id) { mutableStateOf(ep.learnedSkill) }
         val isExisting = presets.any { it.id == ep.id }
+        val skillFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                try {
+                    val text = ctx.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty().trim()
+                    if (text.isNotBlank()) {
+                        ePrompt = text
+                        Toast.makeText(ctx, "Загружено ${text.length} симв.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(ctx, "Файл пустой", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(ctx, "Ошибка чтения: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
         Dialog(
             onDismissRequest = { editingPreset = null },
             properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -1577,12 +1706,25 @@ fun ChatScreen(
                         )
                     }
                     Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(
+                            onClick = { ePrompt = PresetStore.loadCustomTemplate(ctx) },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) { Text("📋 Шаблон скилла", fontSize = 12.sp) }
+                        OutlinedButton(
+                            onClick = { skillFilePicker.launch(arrayOf("text/*", "*/*")) },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) { Text("📂 Из файла", fontSize = 12.sp) }
+                    }
+                    Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
                         value = ePrompt,
                         onValueChange = { ePrompt = it },
-                        label = { Text("Базовый промпт") },
-                        minLines = 4,
-                        maxLines = 8,
+                        label = { Text("Базовый промпт (${ePrompt.length} симв. · ~${ePrompt.length / 1024} КБ)") },
+                        minLines = 5,
+                        maxLines = 10,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(8.dp))
@@ -1598,7 +1740,7 @@ fun ChatScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (ep.isBuiltIn) {
                             TextButton(onClick = {
-                                val def = PresetStore.defaults().firstOrNull { it.id == ep.id }
+                                val def = PresetStore.defaults(ctx).firstOrNull { it.id == ep.id }
                                 if (def != null) {
                                     eEmoji = def.emoji
                                     eName = def.name

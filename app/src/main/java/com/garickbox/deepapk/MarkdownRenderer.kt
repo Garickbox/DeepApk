@@ -527,12 +527,13 @@ fun MarkdownMessageContent(
     fontSizeSp: Int = 15,
     onCopyCode: (lang: String, code: String) -> Unit,
     onCopyTermux: (lang: String, code: String) -> Unit,
-    onCopyTable: (text: String, toast: String) -> Unit = { _, _ -> }
+    onCopyTable: (text: String, toast: String) -> Unit = { _, _ -> },
+    onOpenHtml: (code: String) -> Unit = {}
 ) {
     val blocks = remember(content) { parseMarkdownBlocksCached(content) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
-            RenderMdBlock(block, textColor, isDark, fontSizeSp, onCopyCode, onCopyTermux, onCopyTable)
+            RenderMdBlock(block, textColor, isDark, fontSizeSp, onCopyCode, onCopyTermux, onCopyTable, onOpenHtml)
         }
     }
 }
@@ -545,7 +546,8 @@ fun RenderMdBlock(
     fontSizeSp: Int = 15,
     onCopyCode: (lang: String, code: String) -> Unit,
     onCopyTermux: (lang: String, code: String) -> Unit,
-    onCopyTable: (text: String, toast: String) -> Unit = { _, _ -> }
+    onCopyTable: (text: String, toast: String) -> Unit = { _, _ -> },
+    onOpenHtml: (code: String) -> Unit = {}
 ) {
     val linkColor = if (isDark) Color(0xFF7FA2FF) else DeepSeekBlue
     val inlineCodeBg = if (isDark) Color(0xFF282C34) else Color(0xFFECEFF4)
@@ -746,15 +748,28 @@ fun RenderMdBlock(
                                 color = codeHeaderText,
                                 modifier = Modifier.weight(1f)
                             )
-                            Text(
-                                text = "▶ Termux",
-                                fontSize = 12.sp,
-                                color = DeepSeekBlue,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier
-                                    .clickable { onCopyTermux(block.lang, block.code) }
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                            )
+                            val langLow = block.lang.trim().lowercase()
+                            if (langLow in setOf("html", "htm", "svg")) {
+                                Text(
+                                    text = "🌐 Открыть",
+                                    fontSize = 12.sp,
+                                    color = DeepSeekBlue,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier
+                                        .clickable { onOpenHtml(block.code) }
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            } else if (langLow !in setOf("xml", "css", "json", "md", "markdown")) {
+                                Text(
+                                    text = "▶ Termux",
+                                    fontSize = 12.sp,
+                                    color = DeepSeekBlue,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier
+                                        .clickable { onCopyTermux(block.lang, block.code) }
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
                             Text(
                                 text = "❐ Копировать",
                                 fontSize = 12.sp,
