@@ -168,6 +168,8 @@ fun ChatScreen(
     var streamJob by remember { mutableStateOf<Job?>(null) }
     var error by remember { mutableStateOf("") }
     var searchInfo by remember { mutableStateOf("") }
+    var safStatus by remember { mutableStateOf("") }
+    var cancelRequested by remember { mutableStateOf(false) }
     var reasoningExpanded by remember { mutableStateOf<Set<Long>>(emptySet()) }
 
     var contextMenuMsg by remember { mutableStateOf<Message?>(null) }
@@ -314,10 +316,29 @@ fun ChatScreen(
         ChatStore.saveSessions(ctx, sessions.toList())
     }
 
+    fun feedPosForMsg(msgIdx: Int): Int? {
+        val s0 = sectorStart.coerceIn(0, messages.size); val s1 = sectorEnd.coerceIn(s0, messages.size)
+        if (msgIdx !in s0 until s1) return null
+        var off = if (s0 > 0) 1 else 0
+        for (k in s0 until msgIdx) {
+            val pm = messages[k]
+            if (pm.role == "user") off += 1 else {
+                if (pm.reasoning.isNotBlank()) off += 1
+                val st = stripDocReportForMarkdown(pm.content); val dr = extractDocReport(pm.content)
+                if (pm.content.isBlank() && streaming && k == messages.size - 1) off += 1 else {
+                    if (st.isNotBlank()) off += parseMarkdownBlocksCached(st).size
+                    if (dr != null && !dr.isComplete) off += 1
+                }
+                if (pm.content.isNotBlank() && !(streaming && k == messages.size - 1)) off += 1
+            }
+        }
+        return off
+    }
+
     fun startStream(continueTargetIdx: Int? = null, scrollAnchorIdx: Int? = null, toolDepth: Int = 0) {
         if (streaming) return
-        error = ""
-        searchInfo = ""
+        error = ""; searchInfo = ""; cancelRequested = false
+        if (toolDepth == 0) safStatus = ""
         val targetIdx = if (continueTargetIdx != null) {
             continueTargetIdx
         } else {
@@ -335,10 +356,11 @@ fun ChatScreen(
         resetSectorToTail()
         val anchorMsg = scrollAnchorIdx ?: (targetIdx - 1).coerceAtLeast(0)
         scope.launch {
-            kotlinx.coroutines.yield()
-            val pos = messages.subList(sectorStart, sectorEnd.coerceAtMost(messages.size))
-                .indexOfFirst { it.id == messages.getOrNull(anchorMsg)?.id }
-            if (pos >= 0) listState.animateScrollToItem(pos + if (sectorStart > 0) 1 else 0)
+            kotlinx.coroutines.delay(50)
+            feedPosForMsg(anchorMsg)?.let { pos ->
+                val lastIdx = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                listState.animateScrollToItem(if (lastIdx > 0) pos.coerceAtMost(lastIdx) else pos)
+            }
         }
         streaming = true
         streamJob = scope.launch {
@@ -374,10 +396,12 @@ fun ChatScreen(
                 ).collect { ev ->
                     when (ev) {
                         is StreamEvent.Reasoning -> {
+                            if (safStatus.isNotEmpty()) safStatus = ""
                             pendingReasoning.append(ev.delta)
                             flushDeltas(false)
                         }
                         is StreamEvent.Content -> {
+                            if (safStatus.isNotEmpty()) safStatus = ""
                             pendingContent.append(ev.delta)
                             flushDeltas(false)
                         }
@@ -434,24 +458,32 @@ fun ChatScreen(
                         }
                     }
                     val writeOps = ProjectFs.extractWriteOps(last.content)
-                    if (writeOps.isNotEmpty()) pendingFsEdits = writeOps
-                    if (!wasCancelled && continueTargetIdx == null && projectAutoRead && ProjectFs.isReady(ctx) && toolDepth < 4) {
+                    if (ProjectFs.isReady(ctx) && writeOps.isNotEmpty()) pendingFsEdits = writeOps
+                    if (!wasCancelled && !cancelRequested && continueTargetIdx == null && projectAutoRead && ProjectFs.isReady(ctx) && toolDepth < 4) {
                         val readOps = ProjectFs.extractReadOps(last.content)
                         if (readOps.isNotEmpty()) {
-                            val (summary, payload) = withContext(Dispatchers.IO) { ProjectFs.executeReadOps(ctx, readOps) }
-                            messages[targetIdx] = last.copy(content = ProjectFs.stripReadTags(last.content, summary))
-                            nextAutoReadPayload = payload
+                            safStatus = when (val op = readOps.first()) {
+                                is FsReadOp.Tree -> "Читаю дерево ${op.path.ifBlank { "/" }}…"
+                                is FsReadOp.Grep -> "Ищу «${op.pattern.take(20)}»…"
+                                is FsReadOp.Read -> "Читаю ${op.path.substringAfterLast("/")}…"
+                            }
+                            val res = try { withContext(Dispatchers.IO) { ProjectFs.executeReadOps(ctx, readOps) } } catch (_: Throwable) { null }
+                            if (res != null && !cancelRequested) {
+                                messages[targetIdx] = last.copy(content = ProjectFs.stripReadTags(last.content, res.first))
+                                nextAutoReadPayload = res.second
+                            }
                         }
                     }
                 }
                 persistCurrentSession()
                 streaming = false
                 streamJob = null
-                if (nextAutoReadPayload != null) {
+                if (nextAutoReadPayload != null && !cancelRequested) {
+                    safStatus = "Отправляю файлы ИИ…"
                     messages.add(Message(role = "user", content = nextAutoReadPayload))
                     persistCurrentSession()
-                    scope.launch { startStream(scrollAnchorIdx = messages.size - 1, toolDepth = toolDepth + 1) }
-                }
+                    startStream(scrollAnchorIdx = messages.size - 1, toolDepth = toolDepth + 1)
+                } else { safStatus = "" }
             }
         }
     }
@@ -484,6 +516,7 @@ fun ChatScreen(
             persistCurrentSession(titlePreview)
         }
         messages.add(Message(role = "user", content = payload))
+        persistCurrentSession()
         startStream(scrollAnchorIdx = messages.size - 1)
     }
 
@@ -913,6 +946,15 @@ fun ChatScreen(
                     }
                 }
 
+                if (safStatus.isNotBlank()) {
+                    Surface(color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = DeepSeekBlue)
+                            Spacer(Modifier.width(8.dp))
+                            Text("📂 $safStatus", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
+                    }
+                }
                 if (error.isNotBlank()) {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
@@ -999,7 +1041,7 @@ fun ChatScreen(
                             state = listState,
                             modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
                             reverseLayout = false,
-                            contentPadding = PaddingValues(top = 10.dp, bottom = 52.dp),
+                            contentPadding = PaddingValues(top = 10.dp, bottom = 68.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             if (safeStart > 0) {
@@ -1162,7 +1204,11 @@ fun ChatScreen(
                                         }
                                     }
                                     is ChatFeedItem.AssistantPending -> {
-                                        Text("Печатаю…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = DeepSeekBlue)
+    Spacer(Modifier.width(8.dp))
+    Text(if (safStatus.isNotBlank()) "📂 $safStatus" else if (item.msg.reasoning.isNotBlank()) "Думаю…" else "Отвечаю…", fontSize = 13.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
                                     }
                                     is ChatFeedItem.AssistantBlock -> {
                                         Box(
@@ -1522,7 +1568,7 @@ fun ChatScreen(
                                     .size(34.dp)
                                     .clip(CircleShape)
                                     .background(DeepSeekBlue)
-                                    .clickable { streamJob?.cancel() },
+                                    .clickable { cancelRequested = true; safStatus = ""; streamJob?.cancel() },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text("■", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -1574,15 +1620,8 @@ fun ChatScreen(
                                         focusSectorAround(msgIdx)
                                         scope.launch {
                                             kotlinx.coroutines.yield()
-                                            var offset = if (sectorStart > 0) 1 else 0
-                                            for (i in sectorStart until msgIdx.coerceAtMost(sectorEnd)) {
-                                                val pm = messages[i]
-                                                offset += if (pm.role == "user") 1 else {
-                                                    (if (pm.reasoning.isNotBlank()) 1 else 0) +
-                                                        parseMarkdownBlocksCached(pm.content).size.coerceAtLeast(1) + 1
-                                                }
-                                            }
-                                            listState.animateScrollToItem(offset)
+                                            kotlinx.coroutines.delay(50)
+                                            feedPosForMsg(msgIdx)?.let { listState.animateScrollToItem(it) }
                                         }
                                     }
                                     .padding(vertical = 10.dp),
