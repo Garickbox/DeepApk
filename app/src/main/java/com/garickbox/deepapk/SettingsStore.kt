@@ -7,7 +7,7 @@ data class AppSettings(
     val apiKey: String = "",
     val geminiApiKey: String = "",
     val model: String = "deepseek-flash",
-    val geminiModel: String = "gemini-2.5-flash",
+    val geminiModel: String = "gemini-3.8-flash",
     val thinkingEnabled: Boolean = true,
     val webSearchEnabled: Boolean = true,
     val temperature: Float = 1.0f,
@@ -55,7 +55,8 @@ object SettingsStore {
             apiKey = p.getString("api_key", "") ?: "",
             geminiApiKey = p.getString("gemini_api_key", "") ?: "",
             model = p.getString("model", "deepseek-flash") ?: "deepseek-flash",
-            geminiModel = p.getString("gemini_model", "gemini-2.5-flash") ?: "gemini-2.5-flash",
+            geminiModel = (p.getString("gemini_model", "gemini-3.8-flash") ?: "gemini-3.8-flash")
+                .let { if (it == "gemini-2.5-flash" || it == "gemini-2.0-flash") "gemini-3.8-flash" else it },
             thinkingEnabled = p.getBoolean("thinking_enabled", true),
             webSearchEnabled = webSearch,
             temperature = p.getFloat("temperature", 1.0f),

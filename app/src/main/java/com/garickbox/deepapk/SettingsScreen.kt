@@ -387,9 +387,8 @@ fun SettingsScreen(
         ChoiceDialog(
             title = "Модель Google Gemini",
             items = listOf(
-                "gemini-2.5-flash" to "gemini-2.5-flash (быстрая + thinking)",
-                "gemini-2.5-pro" to "gemini-2.5-pro (максимум ума)",
-                "gemini-2.0-flash" to "gemini-2.0-flash (классика)"
+                "gemini-3.8-flash" to "gemini-3.8-flash (актуальная + thinking)",
+                "gemini-2.5-pro" to "gemini-2.5-pro (максимум ума)"
             ),
             selected = draft.geminiModel,
             onSelect = {
