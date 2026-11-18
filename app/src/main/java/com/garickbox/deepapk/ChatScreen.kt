@@ -467,7 +467,30 @@ fun ChatScreen(
                                 is FsReadOp.Grep -> "Ищу «${op.pattern.take(20)}»…"
                                 is FsReadOp.Read -> "Читаю ${op.path.substringAfterLast("/")}…"
                             }
-                            val res = try { withContext(Dispatchers.IO) { ProjectFs.executeReadOps(ctx, readOps) } } catch (_: Throwable) { null }
+                            var safErr: String? = null
+                            val res = try {
+                                kotlinx.coroutines.withTimeoutOrNull(180_000L) {
+                                    kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
+                                        ProjectFs.executeReadOps(ctx, readOps)
+                                    }
+                                }
+                            } catch (ce: CancellationException) {
+                                throw ce
+                            } catch (se: SecurityException) {
+                                android.util.Log.e("DeepApk", "SAF read SecurityException", se)
+                                safErr = "> 🔒 Доступ к папке проекта отозван или изменился. Переподключи папку через чип SAF в шапке и повтори."
+                                null
+                            } catch (te: Throwable) {
+                                android.util.Log.e("DeepApk", "SAF read failed", te)
+                                safErr = "> ⚠️ Ошибка SAF-чтения: ${te.javaClass.simpleName}: ${te.message ?: "unknown"}"
+                                null
+                            }
+                            if (res == null && safErr == null && !cancelRequested) {
+                                safErr = "> ⏱ SAF-чтение не ответило за 180 с (файл большой или папка недоступна). Нажми «Отправить» ещё раз, чтобы повторить."
+                            }
+                            if (safErr != null && !cancelRequested) {
+                                messages.add(Message(role = "assistant", content = safErr))
+                            }
                             if (res != null && !cancelRequested) {
                                 messages[targetIdx] = last.copy(content = ProjectFs.stripReadTags(last.content, res.first))
                                 nextAutoReadPayload = res.second
