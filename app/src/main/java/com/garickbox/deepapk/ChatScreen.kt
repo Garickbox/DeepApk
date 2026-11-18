@@ -165,3 +165,65 @@ private fun copyForTermux(ctx: Context, text: String) {
     clipboard.setPrimaryClip(ClipData.newPlainText("code", escaped))
     Toast.makeText(ctx, "Скопировано в буфер обмена", Toast.LENGTH_SHORT).show()
 }
+Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    BasicTextField(
+        value = input,
+        onValueChange = { input = it },
+        modifier = Modifier.weight(1f)
+            .background(Color(0xFFF0F0F0))
+            .padding(10.dp)
+            .heightIn(min = 40.dp),
+        textStyle = TextStyle(fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+    )
+    Spacer(Modifier.width(6.dp))
+    Button(
+        onClick = {
+            if (input.isBlank() || streaming) return@Button
+            val userText = input
+            input = ""
+            error = ""
+            searchInfo = ""
+            messages.add(Message("user", userText))
+            messages.add(Message("assistant", ""))
+            val newIdx = messages.size - 1
+            streaming = true
+            scope.launch {
+                try {
+                    DeepSeekApi.chatStream(
+                apiKey = settings.apiKey,
+                model = settings.model,
+                thinkingEnabled = settings.thinkingEnabled,
+                webSearchEnabled = settings.webSearchEnabled,
+                temperature = settings.temperature,
+                maxTokens = settings.maxTokens,
+                systemPrompt = settings.systemPrompt,
+                history = messages.dropLast(1)
+            ).collect { ev ->
+                val cur = messages[newIdx]
+                when (ev) {
+                    is StreamEvent.Reasoning -> messages[newIdx] = cur.copy(reasoning = cur.reasoning + ev.delta)
+            is StreamEvent.Content -> messages[newIdx] = cur.copy(content = cur.content + ev.delta)
+            is StreamEvent.SearchInfo -> searchInfo = "поиск ×${ev.queries}"
+            is StreamEvent.Error -> error = ev.msg
+            StreamEvent.Done -> {}
+        }
+        } catch (e: Exception) {
+            error = e.message ?: "unknown"
+        }
+        ChatStore.save(ctx, messages)
+        streaming = false
+    }
+},
+    enabled = !streaming
+) { Text(if (streaming) "…" else "➤", fontSize = 16.sp) }
+}
+}
+private fun copyForTermux(ctx: Context, text: String) {
+    val escaped = text.replace(Regex("```(\\w*)\\n([\\s\\S]*?)```")) { m ->
+        val ext = m.groupValues[1].ifBlank { "txt" }
+        "cat > file.$ext << 'EOF'\n${m.groupValues[2]}\nEOF"
+    }.replace("\n", "\\n")
+    val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("code", escaped))
+    Toast.makeText(ctx, "Скопировано в буфер обмена", Toast.LENGTH_SHORT).show()
+}
