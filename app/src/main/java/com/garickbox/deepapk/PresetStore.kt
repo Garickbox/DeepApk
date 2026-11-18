@@ -14,7 +14,6 @@ data class PromptPreset(
     val isBuiltIn: Boolean = false
 ) {
     fun buildSystemPrompt(globalExtra: String = ""): String {
-        if (id == "default") return globalExtra
         val sb = StringBuilder()
         if (prompt.isNotBlank()) sb.append(prompt.trim())
         if (learnedSkill.isNotBlank()) {
@@ -25,114 +24,119 @@ data class PromptPreset(
             if (sb.isNotEmpty()) sb.append("\n\n")
             sb.append("Дополнительно:\n").append(globalExtra.trim())
         }
-        sb.append("\n\nЕсли пользователь просит запомнить новое правило или поправляет твой формат на будущее, добавь в самом конце ответа тег <skill_save>краткое правило в 1-2 строки</skill_save>.")
+        if (id != "default") {
+            if (sb.isNotEmpty()) sb.append("\n\n")
+            sb.append("Если пользователь просит запомнить новое правило или поправляет твой формат на будущее, добавь в самом конце ответа тег <skill_save>краткое правило в 1-2 строки</skill_save>.")
+        }
         return sb.toString()
     }
 }
 
 object PresetStore {
     private val lock = Any()
+    private const val PREF_NAME = "deepapk_presets_meta"
+    private const val CURRENT_VER = 2
+    private val CORE_IDS = setOf("default", "termux", "docx_report")
+    private val REMOVED_BUILTIN_IDS = setOf("patch_dev", "writer", "study", "translator", "concise")
+
     private fun file(ctx: Context) = File(ctx.filesDir, "presets.json")
 
-    fun defaults(): List<PromptPreset> = listOf(
+    private fun readSkillAsset(ctx: Context, name: String, fallback: String): String {
+        return try {
+            ctx.assets.open("skills/$name").bufferedReader(Charsets.UTF_8).use { it.readText().trim() }
+                .ifBlank { fallback }
+        } catch (_: Exception) {
+            fallback
+        }
+    }
+
+    fun loadCustomTemplate(ctx: Context): String {
+        return readSkillAsset(ctx, "custom_template.md", "# РОЛЬ\nОпиши задачу и правила ассистента.")
+    }
+
+    fun defaults(ctx: Context): List<PromptPreset> = listOf(
         PromptPreset(
             id = "default",
             name = "Обычный",
             emoji = "💬",
-            prompt = "",
+            prompt = readSkillAsset(ctx, "default.md", "Ты — честный, точный и полезный универсальный помощник. Отвечай ясно, по делу и без выдуманных фактов."),
             isBuiltIn = true
         ),
         PromptPreset(
             id = "termux",
             name = "Termux / Bash",
             emoji = "💻",
-            prompt = "Ты — опытный Android/Linux-разработчик. Пользователь работает в Termux (Android) с проектами на GitHub.\n" +
-                "Правила:\n" +
-                "1. Отвечай на русском, чётко и по делу.\n" +
-                "2. ЗАПРЕЩЕНО предлагать nano/vim/редакторы и дробить ответ на отдельные chmod/cat блоки. Собирай всё в ОДИН цельный копируемый bash-блок (через cat <<'EOF' > файл && chmod +x файл, или Python-патчер cat > ~/patch.py <<'PYEOF').\n" +
-                "3. Все команды и патчи оборачивай в:\n{\n...\n} 2>&1 | tee ~/log.txt\ntermux-clipboard-set < ~/log.txt || true\n" +
-                "4. Если сначала нужно увидеть код/ошибку — дай короткий диагностический grep/sed блок и не гадай.",
+            prompt = readSkillAsset(ctx, "termux.md", "Ты — опытный Android/Linux-разработчик для Termux. Давай цельный bash-блок с tee ~/log.txt."),
             isBuiltIn = true
         ),
         PromptPreset(
             id = "docx_report",
             name = "docx отчет",
             emoji = "📄",
-            prompt = "Ты — генератор официальных ГОСТ-отчётов, рефератов, лабораторных и ответов на билеты.\nПриложение DeepApk само собирает идеальный .docx-файл по ГОСТу (А4, поля 20/15/20/30 мм, Times New Roman 14pt, 1.5 интервал, нумерация страниц, таблицы и картинки). ТЕБЕ НЕ НУЖНО писать <!DOCTYPE>, <style>, CRC32, ZIP или JavaScript.\nВсегда выдавай контент строго внутри тега:\n<doc_report title=\"Короткое_название_файла\">\n...HTML-разметка документа...\n</doc_report>\n\nПравила разметки внутри <doc_report>:\n1. Титул (если нужен): <div class=\"title-page\"> с <p class=\"center noind\"> и <p class=\"right noind\">, затем <div class=\"pagebreak\"></div>.\n2. Заголовки: <h1>, <h2>, <h3>.\n3. Абзацы: <p> (с красной строкой), <p class=\"noind\">, <p class=\"center\">, <p class=\"right\">, формулы <p class=\"formula\">, выделение <b>, <i>, <sub>, <sup>, жёлтые заглушки <span class=\"fill\">[...]</span>.\n4. Списки: <ul>/<ol> с <li>.\n5. Таблицы: <table><tr><th>...</th></tr><tr><td class=\"c\">...</td></tr></table>.\n6. Рисунки, схемы и графики: вставляй векторный <svg width=\"540\" height=\"240\" viewBox=\"0 0 540 240\">...</svg> (DeepApk сам отрендерит его внутрь Word!) + подпись <p class=\"noind center\">Рис. 1. Название</p>.\n7. Если приложена методичка/вопросы или задан объём (например 10 страниц) — выполняй полностью и глубоко, не сокращай разделы.",
-            isBuiltIn = true
-        ),
-        PromptPreset(
-            id = "patch_dev",
-            name = "Патч-инженер",
-            emoji = "🛠",
-            prompt = "Ты — senior-разработчик. Работай хирургически:\n" +
-                "1. Сначала проверь точные якоря/строки, не угадывай.\n" +
-                "2. Делай компактный Python-патчер с проверкой вхождения якорей перед записью, а не переписывай длинные файлы целиком.\n" +
-                "3. Если работа в Termux — давай один цельный блок с tee ~/log.txt.",
-            isBuiltIn = true
-        ),
-        PromptPreset(
-            id = "writer",
-            name = "Редактор / Текст",
-            emoji = "📚",
-            prompt = "Ты — сильный редактор и автор текстов на русском языке. Пиши грамотно, структурированно и живо, без воды и ИИ-штампов.",
-            isBuiltIn = true
-        ),
-        PromptPreset(
-            id = "study",
-            name = "Учёба / Экзамен",
-            emoji = "🎓",
-            prompt = "Ты — сильный преподаватель. Задачи оформляй чётко: Дано -> Формулы -> Подстановка и расчёт -> Ответ с единицами измерения. На экзаменационные вопросы давай структурированные готовые ответы.",
-            isBuiltIn = true
-        ),
-        PromptPreset(
-            id = "translator",
-            name = "Переводчик",
-            emoji = "🇬🇧",
-            prompt = "Ты — профессиональный переводчик. Переводи точно и естественно (RU <-> EN или любой язык), при необходимости кратко поясняя термины и нюансы.",
-            isBuiltIn = true
-        ),
-        PromptPreset(
-            id = "concise",
-            name = "Кратко",
-            emoji = "⚡",
-            prompt = "Отвечай максимально сжато: сразу готовый ответ, решение или список из 3-5 пунктов без вступлений и лишних пояснений.",
+            prompt = readSkillAsset(ctx, "docx_report.md", "Генерируй ГОСТ-документы внутри <doc_report title=\"Отчёт\">...</doc_report>."),
             isBuiltIn = true
         )
     )
 
     fun load(ctx: Context): MutableList<PromptPreset> = synchronized(lock) {
+        val prefs = ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val savedVer = prefs.getInt("ver", 1)
         val f = file(ctx)
-        val base = defaults().associateBy { it.id }.toMutableMap()
+        val freshDefaults = defaults(ctx)
+
         if (!f.exists()) {
-            val list = defaults().toMutableList()
+            val list = freshDefaults.toMutableList()
             saveLocked(ctx, list)
+            prefs.edit().putInt("ver", CURRENT_VER).apply()
             return@synchronized list
         }
+
         return@synchronized try {
             val arr = JSONArray(f.readText())
-            val out = mutableListOf<PromptPreset>()
-            val seen = mutableSetOf<String>()
+            val parsed = mutableListOf<PromptPreset>()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
                 val id = o.optString("id").trim()
                 if (id.isEmpty()) continue
-                seen.add(id)
-                out.add(
+                parsed.add(
                     PromptPreset(
                         id = id,
                         name = o.optString("name", id),
-                        emoji = o.optString("emoji", "✨"),
+                        emoji = o.optString("emoji", "⭐"),
                         prompt = o.optString("prompt", ""),
                         learnedSkill = o.optString("learnedSkill", ""),
-                        isBuiltIn = o.optBoolean("isBuiltIn", base.containsKey(id))
+                        isBuiltIn = o.optBoolean("isBuiltIn", id in CORE_IDS)
                     )
                 )
             }
-            defaults().forEach { d -> if (d.id !in seen) out.add(d) }
-            out
+
+            if (savedVer < CURRENT_VER) {
+                val skillsById = parsed.associate { it.id to it.learnedSkill }
+                val out = mutableListOf<PromptPreset>()
+                freshDefaults.forEach { d ->
+                    out.add(d.copy(learnedSkill = skillsById[d.id].orEmpty()))
+                }
+                parsed.forEach { p ->
+                    val isOldRemoved = p.id in REMOVED_BUILTIN_IDS || p.isBuiltIn
+                    if (p.id !in CORE_IDS && !isOldRemoved) {
+                        out.add(p.copy(isBuiltIn = false))
+                    }
+                }
+                saveLocked(ctx, out)
+                prefs.edit().putInt("ver", CURRENT_VER).apply()
+                return@synchronized out
+            }
+
+            val seen = parsed.map { it.id }.toMutableSet()
+            freshDefaults.forEach { d ->
+                if (d.id !in seen) parsed.add(d)
+            }
+            parsed
         } catch (_: Exception) {
-            defaults().toMutableList()
+            val list = freshDefaults.toMutableList()
+            saveLocked(ctx, list)
+            prefs.edit().putInt("ver", CURRENT_VER).apply()
+            list
         }
     }
 
