@@ -1,8 +1,5 @@
 package com.garickbox.deepapk
-
 import android.content.Context
-
-
 data class AppSettings(
     val apiKey: String = "",
     val model: String = "deepseek-flash",
@@ -12,7 +9,6 @@ data class AppSettings(
     val maxTokens: Int = 16384,
     val systemPrompt: String = "Ты — полезный ассистент. Отвечай развёрнуто, с примерами кода где уместно."
 )
-
 object SettingsStore {
     private const val PREF = "deepapk_settings"
     fun load(ctx: Context): AppSettings {

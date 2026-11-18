@@ -6,13 +6,7 @@ android {
         applicationId = "com.garickbox.deepapk"
         minSdk = 26; targetSdk = 34
         versionCode = ((System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt())
-        versionName = "1.0.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"    project.ext.buildNumber = System.getenv("GITHUB_RUN_NUMBER") ?: "local"
-    applicationVariants.all {
-        outputs.forEach { output ->
-            output.outputFileName = "DeepApk-build-${project.ext.buildNumber}.apk"
-        }
-    }
-}"
+        versionName = "1.0.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
     }
     signingConfigs {
         getByName("debug") {

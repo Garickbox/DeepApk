@@ -1,12 +1,9 @@
 package com.garickbox.deepapk
-
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
-
 data class UpdateInfo(val latestVersion: String, val apkUrl: String, val releasePage: String)
-
 object UpdateChecker {
     private val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build()
     fun check(): UpdateInfo? {
