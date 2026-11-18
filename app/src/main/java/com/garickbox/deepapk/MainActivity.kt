@@ -26,8 +26,8 @@ private val DeepDarkColors = darkColorScheme(
     onBackground = Color(0xFFE7E9EE),
     surface = Color(0xFF181A1F),
     onSurface = Color(0xFFE7E9EE),
-    surfaceVariant = Color(0xFF232733),
-    onSurfaceVariant = Color(0xFFB3BAC6),
+    surfaceVariant = Color(0xFF23262E),
+    onSurfaceVariant = Color(0xFF9EA6B5),
     primaryContainer = Color(0xFF232B42),
     onPrimaryContainer = Color(0xFFE8EEFF)
 )
@@ -37,10 +37,10 @@ private val DeepLightColors = lightColorScheme(
     onPrimary = Color.White,
     background = Color(0xFFFFFFFF),
     onBackground = Color(0xFF1A1C1E),
-    surface = Color(0xFFF7F8FA),
+    surface = Color(0xFFF5F6F8),
     onSurface = Color(0xFF1A1C1E),
-    surfaceVariant = Color(0xFFF0F2F5),
-    onSurfaceVariant = Color(0xFF5A606D),
+    surfaceVariant = Color(0xFFF0F2F6),
+    onSurfaceVariant = Color(0xFF6B7280),
     primaryContainer = Color(0xFFEFF4FF),
     onPrimaryContainer = Color(0xFF1A1C1E)
 )

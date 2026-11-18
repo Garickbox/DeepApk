@@ -7,9 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -237,14 +235,12 @@ fun buildCleanInlineString(
     while (i < text.length) {
         val ch = text[i]
 
-        // 1. Escaped markdown char
         if (ch == '\\' && i + 1 < text.length && text[i + 1] in "*_`[]()~>#+-!\\") {
             append(text[i + 1])
             i += 2
             continue
         }
 
-        // 2. Inline code `...` — verbatim, no entity/markdown mangling
         if (ch == '`') {
             var tickLen = 0
             while (i + tickLen < text.length && text[i + tickLen] == '`') tickLen++
@@ -265,7 +261,6 @@ fun buildCleanInlineString(
             }
         }
 
-        // 3. HTML <a href="...">label</a>
         if (ch == '<') {
             val anchor = HTML_ANCHOR_REGEX.matchAt(text, i)
             if (anchor != null) {
@@ -280,7 +275,6 @@ fun buildCleanInlineString(
             }
         }
 
-        // 4. Markdown link [label](url)
         if (ch == '[') {
             val closeBracket = text.indexOf(']', i + 1)
             if (closeBracket > i + 1 && closeBracket + 1 < text.length && text[closeBracket + 1] == '(') {
@@ -301,7 +295,6 @@ fun buildCleanInlineString(
             }
         }
 
-        // 5. Bare URL
         if (ch == 'h' && (text.startsWith("https://", i) || text.startsWith("http://", i))) {
             val m = BARE_URL_REGEX.matchAt(text, i)
             if (m != null) {
@@ -322,8 +315,7 @@ fun buildCleanInlineString(
             }
         }
 
-        // 6. Bold **...** or __...__
-        if ((text.startsWith("**", i) || text.startsWith("__", i))) {
+        if (text.startsWith("**", i) || text.startsWith("__", i)) {
             val delim = text.substring(i, i + 2)
             val close = text.indexOf(delim, i + 2)
             if (close > i + 2) {
@@ -336,7 +328,6 @@ fun buildCleanInlineString(
             }
         }
 
-        // 7. Strikethrough ~~...~~
         if (text.startsWith("~~", i)) {
             val close = text.indexOf("~~", i + 2)
             if (close > i + 2) {
@@ -349,7 +340,6 @@ fun buildCleanInlineString(
             }
         }
 
-        // 8. Italic *...*
         if (ch == '*' && i + 1 < text.length && text[i + 1] != ' ' && text[i + 1] != '*') {
             val close = text.indexOf('*', i + 1)
             if (close > i + 1 && text[close - 1] != ' ') {
@@ -362,7 +352,6 @@ fun buildCleanInlineString(
             }
         }
 
-        // 9. HTML entities
         if (ch == '&') {
             val semi = text.indexOf(';', i + 1)
             if (semi in (i + 2)..(i + 8)) {
@@ -381,6 +370,101 @@ fun buildCleanInlineString(
     }
 }
 
+private val CODE_KEYWORDS = setOf(
+    "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac",
+    "function", "return", "local", "export", "echo", "cd", "grep", "cat", "sed", "awk",
+    "find", "tee", "git", "python", "python3", "bash", "sh", "true", "false",
+    "fun", "val", "var", "object", "class", "data", "sealed", "import", "package",
+    "when", "null", "try", "catch", "finally", "def", "from", "as", "with", "in"
+)
+
+private fun highlightCode(code: String, isDark: Boolean): AnnotatedString = buildAnnotatedString {
+    val baseColor = if (isDark) Color(0xFFE5E7EB) else Color(0xFF1F2328)
+    val commentColor = if (isDark) Color(0xFF7D8590) else Color(0xFF6E7781)
+    val stringColor = if (isDark) Color(0xFF7EE787) else Color(0xFF22863A)
+    val kwColor = if (isDark) Color(0xFF79C0FF) else Color(0xFF005CC5)
+    val varColor = if (isDark) Color(0xFFFFA657) else Color(0xFFB35900)
+
+    var i = 0
+    while (i < code.length) {
+        val ch = code[i]
+
+        if (ch == '#' || (ch == '/' && i + 1 < code.length && code[i + 1] == '/')) {
+            val end = code.indexOf('\n', i).let { if (it == -1) code.length else it }
+            withStyle(SpanStyle(color = commentColor)) {
+                append(code.substring(i, end))
+            }
+            i = end
+            continue
+        }
+
+        if (ch == '"' || ch == '\'') {
+            var j = i + 1
+            while (j < code.length) {
+                if (code[j] == '\\' && ch == '"' && j + 1 < code.length) {
+                    j += 2
+                    continue
+                }
+                if (code[j] == ch || code[j] == '\n') {
+                    if (code[j] == ch) j++
+                    break
+                }
+                j++
+            }
+            withStyle(SpanStyle(color = stringColor)) {
+                append(code.substring(i, j))
+            }
+            i = j
+            continue
+        }
+
+        if (ch == '$' && i + 1 < code.length && (code[i + 1].isLetterOrDigit() || code[i + 1] == '_' || code[i + 1] == '{')) {
+            var j = i + 1
+            if (code[j] == '{') {
+                val close = code.indexOf('}', j + 1)
+                j = if (close != -1) close + 1 else j + 1
+            } else {
+                while (j < code.length && (code[j].isLetterOrDigit() || code[j] == '_')) j++
+            }
+            withStyle(SpanStyle(color = varColor)) {
+                append(code.substring(i, j))
+            }
+            i = j
+            continue
+        }
+
+        if (ch.isLetter() || ch == '_') {
+            var j = i + 1
+            while (j < code.length && (code[j].isLetterOrDigit() || code[j] == '_')) j++
+            val word = code.substring(i, j)
+            if (word in CODE_KEYWORDS) {
+                withStyle(SpanStyle(color = kwColor, fontWeight = FontWeight.Medium)) {
+                    append(word)
+                }
+            } else {
+                withStyle(SpanStyle(color = baseColor)) {
+                    append(word)
+                }
+            }
+            i = j
+            continue
+        }
+
+        if (ch == '|') {
+            withStyle(SpanStyle(color = varColor, fontWeight = FontWeight.Bold)) {
+                append(ch)
+            }
+            i++
+            continue
+        }
+
+        withStyle(SpanStyle(color = baseColor)) {
+            append(ch)
+        }
+        i++
+    }
+}
+
 @Composable
 fun MarkdownMessageContent(
     content: String,
@@ -394,13 +478,18 @@ fun MarkdownMessageContent(
     val inlineCodeBg = if (isDark) Color(0xFF282C34) else Color(0xFFECEFF4)
     val quoteBarColor = if (isDark) Color(0xFF3E4554) else Color(0xFFD0D5DD)
 
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    val codeBg = if (isDark) Color(0xFF1A1C22) else Color(0xFFF7F8FA)
+    val codeBorder = if (isDark) Color(0xFF2D3139) else Color(0xFFE6E8EE)
+    val codeHeaderDivider = if (isDark) Color(0xFF2A2E37) else Color(0xFFEAECF0)
+    val codeHeaderText = if (isDark) Color(0xFF9AA0A6) else Color(0xFF6B7280)
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
             when (block) {
                 is MdBlock.Divider -> {
                     HorizontalDivider(
                         modifier = Modifier.padding(vertical = 4.dp),
-                        color = textColor.copy(alpha = 0.15f)
+                        color = textColor.copy(alpha = 0.12f)
                     )
                 }
 
@@ -414,15 +503,13 @@ fun MarkdownMessageContent(
                     val styled = remember(block.text, isDark) {
                         buildCleanInlineString(block.text, linkColor, inlineCodeBg)
                     }
-                    SelectionContainer {
-                        Text(
-                            text = styled,
-                            fontSize = size,
-                            fontWeight = FontWeight.Bold,
-                            color = textColor,
-                            lineHeight = (size.value + 5).sp
-                        )
-                    }
+                    Text(
+                        text = styled,
+                        fontSize = size,
+                        fontWeight = FontWeight.Bold,
+                        color = textColor,
+                        lineHeight = (size.value + 5).sp
+                    )
                 }
 
                 is MdBlock.Quote -> {
@@ -442,14 +529,12 @@ fun MarkdownMessageContent(
                             }
                             .padding(start = 10.dp, top = 2.dp, bottom = 2.dp)
                     ) {
-                        SelectionContainer {
-                            Text(
-                                text = styled,
-                                fontSize = 14.sp,
-                                color = textColor.copy(alpha = 0.8f),
-                                lineHeight = 20.sp
-                            )
-                        }
+                        Text(
+                            text = styled,
+                            fontSize = 14.sp,
+                            color = textColor.copy(alpha = 0.8f),
+                            lineHeight = 20.sp
+                        )
                     }
                 }
 
@@ -463,19 +548,18 @@ fun MarkdownMessageContent(
                     ) {
                         Text(
                             text = block.marker,
-                            fontSize = 14.sp,
+                            fontSize = 14.5.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = textColor.copy(alpha = 0.8f),
                             modifier = Modifier.padding(start = 4.dp, end = 8.dp)
                         )
-                        SelectionContainer(Modifier.weight(1f)) {
-                            Text(
-                                text = styled,
-                                fontSize = 14.5.sp,
-                                color = textColor,
-                                lineHeight = 21.sp
-                            )
-                        }
+                        Text(
+                            text = styled,
+                            fontSize = 15.sp,
+                            color = textColor,
+                            lineHeight = 22.sp,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
 
@@ -483,71 +567,66 @@ fun MarkdownMessageContent(
                     val styled = remember(block.text, isDark) {
                         buildCleanInlineString(block.text, linkColor, inlineCodeBg)
                     }
-                    SelectionContainer {
-                        Text(
-                            text = styled,
-                            fontSize = 14.5.sp,
-                            color = textColor,
-                            lineHeight = 21.5.sp
-                        )
-                    }
+                    Text(
+                        text = styled,
+                        fontSize = 15.sp,
+                        color = textColor,
+                        lineHeight = 22.sp
+                    )
                 }
 
                 is MdBlock.Code -> {
-                    val isShell = block.lang.lowercase() in listOf("sh", "bash", "zsh", "shell")
+                    val highlighted = remember(block.code, isDark) {
+                        highlightCode(block.code, isDark)
+                    }
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .border(1.dp, Color(0xFF2D3139), RoundedCornerShape(10.dp))
-                            .background(Color(0xFF181A1F))
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(1.dp, codeBorder, RoundedCornerShape(14.dp))
+                            .background(codeBg)
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(Color(0xFF23262E))
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
                                 text = block.lang.ifBlank { "code" },
-                                fontSize = 11.sp,
-                                color = Color(0xFF9AA0A6),
-                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                color = codeHeaderText,
                                 modifier = Modifier.weight(1f)
                             )
                             Text(
-                                text = "📋 Копировать",
-                                fontSize = 11.5.sp,
-                                color = Color(0xFF8AB4F8),
+                                text = "▶ Termux",
+                                fontSize = 12.sp,
+                                color = DeepSeekBlue,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .clickable { onCopyTermux(block.lang, block.code) }
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                            Text(
+                                text = "❐ Копировать",
+                                fontSize = 12.sp,
+                                color = codeHeaderText,
                                 modifier = Modifier
                                     .clickable { onCopyCode(block.lang, block.code) }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                            if (!isShell) {
-                                Text(
-                                    text = "▶ Termux",
-                                    fontSize = 11.5.sp,
-                                    color = Color(0xFF81C995),
-                                    modifier = Modifier
-                                        .clickable { onCopyTermux(block.lang, block.code) }
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                        SelectionContainer {
-                            Text(
-                                text = block.code,
-                                fontSize = 12.5.sp,
-                                lineHeight = 18.sp,
-                                color = Color(0xFFE8EAED),
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState())
-                                    .padding(10.dp)
+                                    .padding(start = 6.dp, top = 2.dp, bottom = 2.dp)
                             )
                         }
+                        HorizontalDivider(color = codeHeaderDivider, thickness = 1.dp)
+                        Text(
+                            text = highlighted,
+                            fontSize = 12.5.sp,
+                            lineHeight = 18.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(12.dp)
+                        )
                     }
                 }
             }
