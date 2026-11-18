@@ -21,9 +21,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @Composable
 fun ChatScreen(onOpenSettings: () -> Unit) {
@@ -34,6 +32,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     var messages by remember { mutableStateOf(ChatStore.load(ctx)) }
     var streaming by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    var searchInfo by remember { mutableStateOf("") }
     var reasoningExpanded by remember { mutableStateOf<Set<Int>>(emptySet()) }
 
     LaunchedEffect(Unit) { settings = SettingsStore.load(ctx) }
@@ -60,8 +59,17 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().background(Color(0xFFEEEEEE)).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("DeepApk · ${settings.model}", fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text("⚙", fontSize = 20.sp, modifier = Modifier.clickable { onOpenSettings() }.padding(4.dp))
+            Column(Modifier.weight(1f)) {
+                Text("DeepApk v${BuildConfig.VERSION_NAME}", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "build ${BuildConfig.VERSION_CODE} · ${settings.model}" +
+                        (if (settings.thinkingEnabled) " · 🧠" else "") +
+                        (if (settings.webSearchEnabled) " · 🌐" else ""),
+                    fontSize = 10.sp, color = Color.Gray
+                )
+            }
+            if (searchInfo.isNotBlank()) Text("🌐 $searchInfo", fontSize = 10.sp, color = Color(0xFF0066CC))
+            Text("⚙", fontSize = 22.sp, modifier = Modifier.clickable { onOpenSettings() }.padding(4.dp))
         }
         if (error.isNotBlank()) {
             Text("❌ $error", fontSize = 11.sp, color = Color.Red, modifier = Modifier.padding(8.dp))
@@ -96,8 +104,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             BasicTextField(
                 value = input, onValueChange = { input = it },
-                modifier = Modifier.weight(1f).background(Color(0xFFF0F0F0)).padding(10.dp)
-                    .heightIn(min = 40.dp),
+                modifier = Modifier.weight(1f).background(Color(0xFFF0F0F0)).padding(10.dp).heightIn(min = 40.dp),
                 textStyle = TextStyle(fontSize = 14.sp, fontFamily = FontFamily.Monospace)
             )
             Spacer(Modifier.width(6.dp))
@@ -105,30 +112,28 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 onClick = {
                     if (input.isBlank() || streaming) return@Button
                     val userText = input
-                    input = ""; error = ""
+                    input = ""; error = ""; searchInfo = ""
                     messages.add(Message("user", userText))
                     messages.add(Message("assistant", ""))
                     val newIdx = messages.size - 1
                     streaming = true
                     scope.launch {
-                        val webCtx = if (settings.webSearchEnabled && settings.tavilyKey.isNotBlank()) {
-                            withContext(Dispatchers.IO) { WebSearch.tavily(settings.tavilyKey, userText) }
-                        } else ""
-                        val historySnapshot = messages.dropLast(1)
                         try {
                             DeepSeekApi.chatStream(
                                 apiKey = settings.apiKey,
                                 model = settings.model,
+                                thinkingEnabled = settings.thinkingEnabled,
+                                webSearchEnabled = settings.webSearchEnabled,
                                 temperature = settings.temperature,
                                 maxTokens = settings.maxTokens,
                                 systemPrompt = settings.systemPrompt,
-                                history = historySnapshot,
-                                webContext = webCtx
+                                history = messages.dropLast(1)
                             ).collect { ev ->
                                 val cur = messages[newIdx]
                                 when (ev) {
                                     is StreamEvent.Reasoning -> messages[newIdx] = cur.copy(reasoning = cur.reasoning + ev.delta)
                                     is StreamEvent.Content -> messages[newIdx] = cur.copy(content = cur.content + ev.delta)
+                                    is StreamEvent.SearchInfo -> searchInfo = "поиск ×${ev.queries}"
                                     is StreamEvent.Error -> error = ev.msg
                                     StreamEvent.Done -> {}
                                 }

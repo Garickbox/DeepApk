@@ -15,9 +15,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v3
       - name: Build
         run: ./gradlew assembleDebug --no-daemon
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk DeepApk-build-${{ github.run_number }}.apk
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: build-${{ github.run_number }}
-          files: app/build/outputs/apk/debug/app-debug.apk
+          body: |
+            Автосборка DeepApk
+            versionCode: ${{ github.run_number }}
+          files: DeepApk-build-${{ github.run_number }}.apk

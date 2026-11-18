@@ -4,12 +4,12 @@ import android.content.Context
 
 data class AppSettings(
     val apiKey: String = "",
-    val model: String = "deepseek-reasoner",
+    val model: String = "deepseek-flash",
+    val thinkingEnabled: Boolean = true,
+    val webSearchEnabled: Boolean = true,
     val temperature: Float = 1.0f,
-    val maxTokens: Int = 32768,
-    val systemPrompt: String = "Ты — полезный ассистент. Отвечай развёрнуто, с примерами кода где уместно.",
-    val tavilyKey: String = "",
-    val webSearchEnabled: Boolean = false
+    val maxTokens: Int = 16384,
+    val systemPrompt: String = "Ты — полезный ассистент. Отвечай развёрнуто, с примерами кода где уместно."
 )
 
 object SettingsStore {
@@ -18,23 +18,23 @@ object SettingsStore {
         val p = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
         return AppSettings(
             apiKey = p.getString("api_key", "") ?: "",
-            model = p.getString("model", "deepseek-reasoner") ?: "deepseek-reasoner",
+            model = p.getString("model", "deepseek-flash") ?: "deepseek-flash",
+            thinkingEnabled = p.getBoolean("thinking_enabled", true),
+            webSearchEnabled = p.getBoolean("web_search_enabled", true),
             temperature = p.getFloat("temperature", 1.0f),
-            maxTokens = p.getInt("max_tokens", 32768),
-            systemPrompt = p.getString("system_prompt", AppSettings().systemPrompt) ?: "",
-            tavilyKey = p.getString("tavily_key", "") ?: "",
-            webSearchEnabled = p.getBoolean("web_search_enabled", false)
+            maxTokens = p.getInt("max_tokens", 16384),
+            systemPrompt = p.getString("system_prompt", AppSettings().systemPrompt) ?: ""
         )
     }
     fun save(ctx: Context, s: AppSettings) {
         ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
             .putString("api_key", s.apiKey)
             .putString("model", s.model)
+            .putBoolean("thinking_enabled", s.thinkingEnabled)
+            .putBoolean("web_search_enabled", s.webSearchEnabled)
             .putFloat("temperature", s.temperature)
             .putInt("max_tokens", s.maxTokens)
             .putString("system_prompt", s.systemPrompt)
-            .putString("tavily_key", s.tavilyKey)
-            .putBoolean("web_search_enabled", s.webSearchEnabled)
             .apply()
     }
 }
