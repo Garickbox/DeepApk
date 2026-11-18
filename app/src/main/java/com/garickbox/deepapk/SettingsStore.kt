@@ -2,32 +2,29 @@ package com.garickbox.deepapk
 
 import android.content.Context
 
+
 data class AppSettings(
-    val apiKey: String = DEFAULT_API_KEY,
-    val model: String = "deepseek-v4-pro",
+    val apiKey: String = "",
+    val model: String = "deepseek-flash",
     val thinkingEnabled: Boolean = true,
-    val webSearchEnabled: Boolean = false,
+    val webSearchEnabled: Boolean = true,
     val temperature: Float = 1.0f,
-    val maxTokens: Int = 32768,
+    val maxTokens: Int = 16384,
     val systemPrompt: String = "Ты — полезный ассистент. Отвечай развёрнуто, с примерами кода где уместно."
-) {
-    companion object {
-        const val DEFAULT_API_KEY = "sk-3ae012f894a941b782c34ad9d8a561be"
-    }
-}
+)
 
 object SettingsStore {
     private const val PREF = "deepapk_settings"
     fun load(ctx: Context): AppSettings {
         val p = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
         return AppSettings(
-            apiKey = p.getString("api_key", AppSettings.DEFAULT_API_KEY) ?: AppSettings.DEFAULT_API_KEY,
-            model = p.getString("model", "deepseek-v4-pro") ?: "deepseek-v4-pro",
+            apiKey = p.getString("api_key", "") ?: "",
+            model = p.getString("model", "deepseek-flash") ?: "deepseek-flash",
             thinkingEnabled = p.getBoolean("thinking_enabled", true),
-            webSearchEnabled = p.getBoolean("web_search_enabled", false),
+            webSearchEnabled = p.getBoolean("web_search_enabled", true),
             temperature = p.getFloat("temperature", 1.0f),
-            maxTokens = p.getInt("max_tokens", 32768),
-            systemPrompt = p.getString("system_prompt", AppSettings().systemPrompt) ?: AppSettings().systemPrompt
+            maxTokens = p.getInt("max_tokens", 16384),
+            systemPrompt = p.getString("system_prompt", AppSettings().systemPrompt) ?: ""
         )
     }
     fun save(ctx: Context, s: AppSettings) {

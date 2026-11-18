@@ -1,5 +1,6 @@
 package com.garickbox.deepapk
 
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -29,9 +30,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     val scope = rememberCoroutineScope()
     var settings by remember { mutableStateOf(SettingsStore.load(ctx)) }
     var input by remember { mutableStateOf("") }
-    val messages = remember {
-        mutableStateListOf<Message>().apply { addAll(ChatStore.load(ctx)) }
-    }
+    var messages by remember { mutableStateOf(ChatStore.load(ctx)) }
     var streaming by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var searchInfo by remember { mutableStateOf("") }
@@ -52,8 +51,8 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
             Button(onClick = {
                 if (input.isNotBlank()) {
                     val s = settings.copy(apiKey = input.trim())
-                    SettingsStore.save(ctx, s); settings = s; input = ""
-                }
+            SettingsStore.save(ctx, s); settings = s; input = ""
+        }
             }, modifier = Modifier.fillMaxWidth()) { Text("Сохранить") }
         }
         return
@@ -65,18 +64,12 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 Text("DeepApk v${BuildConfig.VERSION_NAME}", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Text(
                     "build ${BuildConfig.VERSION_CODE} · ${settings.model}" +
-                        (if (settings.thinkingEnabled) " · 🧠" else "") +
-                        (if (settings.webSearchEnabled) " · 🌐" else ""),
-                    fontSize = 10.sp, color = Color.Gray
-                )
+            (if (settings.thinkingEnabled) " · 🧠" else "") +
+            (if (settings.webSearchEnabled) " · 🌐" else ""),
+            fontSize = 10.sp, color = Color.Gray
+        )
             }
             if (searchInfo.isNotBlank()) Text("🌐 $searchInfo", fontSize = 10.sp, color = Color(0xFF0066CC))
-            Text("🗑", fontSize = 20.sp, modifier = Modifier.clickable {
-                if (!streaming) {
-                    messages.clear()
-                    ChatStore.clear(ctx)
-                }
-            }.padding(4.dp))
             Text("⚙", fontSize = 22.sp, modifier = Modifier.clickable { onOpenSettings() }.padding(4.dp))
         }
         if (error.isNotBlank()) {
@@ -89,98 +82,86 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Text(if (m.role == "user") "Вы" else "DeepSeek", fontSize = 11.sp, color = Color.Gray)
                     if (m.reasoning.isNotBlank()) {
-                        val expanded = idx in reasoningExpanded
-                        Text(
-                            (if (expanded) "▼" else "▶") + " 💭 Reasoning (${m.reasoning.length} симв.)",
-                            fontSize = 11.sp, color = Color(0xFF666666),
-                            modifier = Modifier.clickable {
-                                reasoningExpanded = if (expanded) reasoningExpanded - idx else reasoningExpanded + idx
-                            }.padding(vertical = 4.dp)
-                        )
-                        if (expanded) {
-                            Text(m.reasoning, fontSize = 11.sp, color = Color(0xFF888888), fontFamily = FontFamily.Monospace)
-                        }
-                    }
-                    Text(m.content, fontSize = 14.sp)
-                    if (m.role == "assistant" && m.content.isNotBlank()) {
-                        Row {
-                            if (m.content.contains("```")) {
-                                TextButton(onClick = { copyForTermux(ctx, m.content) }) {
-                                    Text("📋 Для Termux", fontSize = 11.sp)
-                                }
-                            }
-                            TextButton(onClick = { copyPlain(ctx, m.content) }) {
-                                Text("📋 Копировать", fontSize = 11.sp)
-                            }
-                        }
-                    }
-                    HorizontalDivider()
-                }
-            }
+                val expanded = idx in reasoningExpanded
+                Text(
+                    (if (expanded) "▼" else "▶") + " 💭 Reasoning (${m.reasoning.length} симв.)",
+            fontSize = 11.sp,
+            color = Color(0xFF666666),
+            modifier = Modifier.clickable {
+                reasoningExpanded = if (expanded) reasoningExpanded - idx else reasoningExpanded + idx
+            }.padding(vertical = 4.dp)
+        )
+                if (expanded) {
+                    Text(m.reasoning, fontSize = 11.sp, color = Color(0xFF888888), fontFamily = FontFamily.Monospace)
         }
-        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            BasicTextField(
-                value = input, onValueChange = { input = it },
-                modifier = Modifier.weight(1f).background(Color(0xFFF0F0F0)).padding(10.dp).heightIn(min = 40.dp),
-                textStyle = TextStyle(fontSize = 14.sp, fontFamily = FontFamily.Monospace)
-            )
-            Spacer(Modifier.width(6.dp))
-            Button(
-                onClick = {
-                    if (input.isBlank() || streaming) return@Button
-                    val userText = input
-                    input = ""; error = ""; searchInfo = ""
-                    messages.add(Message("user", userText))
-                    messages.add(Message("assistant", ""))
-                    val newIdx = messages.size - 1
-                    streaming = true
-                    scope.launch {
-                        try {
-                            DeepSeekApi.chatStream(
-                                apiKey = settings.apiKey,
-                                model = settings.model,
-                                thinkingEnabled = settings.thinkingEnabled,
-                                webSearchEnabled = settings.webSearchEnabled,
-                                temperature = settings.temperature,
-                                maxTokens = settings.maxTokens,
-                                systemPrompt = settings.systemPrompt,
-                                history = messages.dropLast(1)
-                            ).collect { ev ->
-                                val cur = messages[newIdx]
-                                when (ev) {
-                                    is StreamEvent.Reasoning -> messages[newIdx] = cur.copy(reasoning = cur.reasoning + ev.delta)
-                                    is StreamEvent.Content -> messages[newIdx] = cur.copy(content = cur.content + ev.delta)
-                                    is StreamEvent.SearchInfo -> searchInfo = "поиск ×${ev.queries}"
-                                    is StreamEvent.Error -> error = ev.msg
-                                    StreamEvent.Done -> {}
-                                }
-                            }
-                        } catch (e: Exception) {
-                            error = e.message ?: "unknown"
-                        }
-                        ChatStore.save(ctx, messages)
-                        streaming = false
-                    }
-                },
-                enabled = !streaming
-            ) { Text(if (streaming) "…" else "➤", fontSize = 16.sp) }
+            }
+            Text(m.content, fontSize = 14.sp)
+            if (m.role == "assistant" && m.content.contains("```")) {
+                TextButton(onClick = { copyForTermux(ctx, m.content) }) { Text("📋 Копировать для Termux", fontSize = 11.sp) }
+            }
+            HorizontalDivider()
         }
     }
 }
-
-private fun copyPlain(ctx: Context, text: String) {
-    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cm.setPrimaryClip(ClipData.newPlainText("deepapk", text))
-    Toast.makeText(ctx, "Скопировано", Toast.LENGTH_SHORT).show()
+Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    BasicTextField(
+        value = input,
+        onValueChange = { input = it },
+        modifier = Modifier.weight(1f)
+            .background(Color(0xFFF0F0F0))
+            .padding(10.dp)
+            .heightIn(min = 40.dp),
+        textStyle = TextStyle(fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+    )
+    Spacer(Modifier.width(6.dp))
+    Button(
+        onClick = {
+            if (input.isBlank() || streaming) return@Button
+            val userText = input
+            input = ""
+            error = ""
+            searchInfo = ""
+            messages.add(Message("user", userText))
+            messages.add(Message("assistant", ""))
+            val newIdx = messages.size - 1
+            streaming = true
+            scope.launch {
+                try {
+                    DeepSeekApi.chatStream(
+                apiKey = settings.apiKey,
+                model = settings.model,
+                thinkingEnabled = settings.thinkingEnabled,
+                webSearchEnabled = settings.webSearchEnabled,
+                temperature = settings.temperature,
+                maxTokens = settings.maxTokens,
+                systemPrompt = settings.systemPrompt,
+                history = messages.dropLast(1)
+            ).collect { ev ->
+                val cur = messages[newIdx]
+                when (ev) {
+                    is StreamEvent.Reasoning -> messages[newIdx] = cur.copy(reasoning = cur.reasoning + ev.delta)
+            is StreamEvent.Content -> messages[newIdx] = cur.copy(content = cur.content + ev.delta)
+            is StreamEvent.SearchInfo -> searchInfo = "поиск ×${ev.queries}"
+            is StreamEvent.Error -> error = ev.msg
+            StreamEvent.Done -> {}
+        }
+        } catch (e: Exception) {
+            error = e.message ?: "unknown"
+        }
+        ChatStore.save(ctx, messages)
+        streaming = false
+    }
+},
+    enabled = !streaming
+) { Text(if (streaming) "…" else "➤", fontSize = 16.sp) }
 }
-
+}
 private fun copyForTermux(ctx: Context, text: String) {
-    val marker = "DEEPAPK_EOF"
     val escaped = text.replace(Regex("```(\\w*)\\n([\\s\\S]*?)```")) { m ->
         val ext = m.groupValues[1].ifBlank { "txt" }
-        "cat > file.$ext << '" + marker + "'\n" + m.groupValues[2] + marker + "\n"
-    }
-    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cm.setPrimaryClip(ClipData.newPlainText("termux", escaped))
-    Toast.makeText(ctx, "Скопировано для Termux", Toast.LENGTH_SHORT).show()
+        "cat > file.$ext << 'EOF'\n${m.groupValues[2]}\nEOF"
+    }.replace("\n", "\\n")
+    val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("code", escaped))
+    Toast.makeText(ctx, "Скопировано в буфер обмена", Toast.LENGTH_SHORT).show()
 }

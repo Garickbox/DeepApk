@@ -9,7 +9,6 @@ data class UpdateInfo(val latestVersion: String, val apkUrl: String, val release
 
 object UpdateChecker {
     private val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build()
-
     fun check(): UpdateInfo? {
         return try {
             val req = Request.Builder()
