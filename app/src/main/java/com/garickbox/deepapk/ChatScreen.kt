@@ -169,6 +169,8 @@ fun ChatScreen(
     var error by remember { mutableStateOf("") }
     var searchInfo by remember { mutableStateOf("") }
     var safStatus by remember { mutableStateOf("") }
+    var safRetryTargetIdx by remember { mutableStateOf(-1) }
+    var safRetryOps by remember { mutableStateOf<List<FsReadOp>>(emptyList()) }
     var cancelRequested by remember { mutableStateOf(false) }
     var reasoningExpanded by remember { mutableStateOf<Set<Long>>(emptySet()) }
 
@@ -490,8 +492,12 @@ fun ChatScreen(
                             }
                             if (safErr != null && !cancelRequested) {
                                 messages.add(Message(role = "assistant", content = safErr))
+                                safRetryTargetIdx = targetIdx
+                                safRetryOps = readOps
                             }
                             if (res != null && !cancelRequested) {
+                                safRetryTargetIdx = -1
+                                safRetryOps = emptyList()
                                 messages[targetIdx] = last.copy(content = ProjectFs.stripReadTags(last.content, res.first))
                                 nextAutoReadPayload = res.second
                             }
@@ -507,6 +513,52 @@ fun ChatScreen(
                     persistCurrentSession()
                     startStream(scrollAnchorIdx = messages.size - 1, toolDepth = toolDepth + 1)
                 } else { safStatus = "" }
+            }
+        }
+    }
+
+    fun retrySafRead() {
+        val rOps = safRetryOps
+        val rIdx = safRetryTargetIdx
+        if (rOps.isEmpty() || rIdx < 0 || streaming) return
+        safRetryTargetIdx = -1
+        safRetryOps = emptyList()
+        val lastMsg = messages.lastOrNull()
+        if (lastMsg != null && lastMsg.role == "assistant") {
+            val c = lastMsg.content
+            if (c.startsWith("> 🔒 Доступ к папке") || c.startsWith("> ⚠️ Ошибка SAF-чтения") ||
+                c.startsWith("> ⏱ SAF-чтение") || c.startsWith("> ⏱ Повторное SAF-чтение")) {
+                messages.removeAt(messages.size - 1)
+            }
+        }
+        safStatus = "Повторяю SAF-чтение…"
+        scope.launch {
+            val res = try {
+                kotlinx.coroutines.withTimeoutOrNull(180_000L) {
+                    kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
+                        ProjectFs.executeReadOps(ctx, rOps)
+                    }
+                }
+            } catch (ce: CancellationException) { throw ce }
+            catch (se: SecurityException) {
+                android.util.Log.e("DeepApk", "SAF retry SecurityException", se); null
+            } catch (te: Throwable) {
+                android.util.Log.e("DeepApk", "SAF retry failed", te); null
+            }
+            if (res != null && !cancelRequested) {
+                val modelMsg = messages.getOrNull(rIdx)
+                if (modelMsg != null) {
+                    messages[rIdx] = modelMsg.copy(content = ProjectFs.stripReadTags(modelMsg.content, res.first))
+                }
+                safStatus = "Отправляю файлы ИИ…"
+                messages.add(Message(role = "user", content = res.second))
+                persistCurrentSession()
+                startStream(scrollAnchorIdx = messages.size - 1, toolDepth = 1)
+            } else {
+                safStatus = ""
+                messages.add(Message(role = "assistant", content = "> ⏱ Повторное SAF-чтение не ответило. Проверь папку и попробуй снова."))
+                safRetryTargetIdx = rIdx
+                safRetryOps = rOps
             }
         }
     }
@@ -1327,6 +1379,15 @@ fun ChatScreen(
                                                     fontWeight = if (m.truncated) FontWeight.SemiBold else FontWeight.Normal,
                                                     color = if (m.truncated) DeepSeekBlue else MaterialTheme.colorScheme.onSurfaceVariant,
                                                     modifier = Modifier.clickable { startStream(continueTargetIdx = idx) }.padding(vertical = 2.dp)
+                                                )
+                                            }
+                                            if (safRetryOps.isNotEmpty() && safRetryTargetIdx >= 0 && idx == messages.size - 1) {
+                                                Text(
+                                                    "🔁 Повторить SAF",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = DeepSeekBlue,
+                                                    modifier = Modifier.clickable { retrySafRead() }.padding(vertical = 2.dp)
                                                 )
                                             }
                                             Spacer(Modifier.weight(1f))
