@@ -73,6 +73,42 @@ private sealed class ChatFeedItem(val key: String) {
 private const val SECTOR_SIZE = 28
 private const val SECTOR_STEP = 20
 
+private fun splitUserAttachments(raw: String): Pair<List<Pair<String, String>>, String> {
+    if (!raw.contains("[Файл: ")) return emptyList<Pair<String, String>>() to raw
+    val lines = raw.replace("\r\n", "\n").split("\n")
+    val files = mutableListOf<Pair<String, String>>()
+    val textOut = mutableListOf<String>()
+    var i = 0
+    while (i < lines.size) {
+        val ln = lines[i]
+        if (ln.startsWith("[Файл: ") && ln.endsWith("]") && i + 1 < lines.size) {
+            val next = lines[i + 1]
+            val ticks = next.takeWhile { it == '`' }.length
+            if (ticks >= 3) {
+                val fName = ln.removePrefix("[Файл: ").removeSuffix("]").trim().ifBlank { "файл" }
+                val closeFence = "`".repeat(ticks)
+                val body = mutableListOf<String>()
+                var j = i + 2
+                while (j < lines.size) {
+                    if (lines[j].trim() == closeFence) {
+                        j++
+                        break
+                    }
+                    body.add(lines[j])
+                    j++
+                }
+                files.add(fName to body.joinToString("\n").trim())
+                i = j
+                continue
+            }
+        }
+        textOut.add(ln)
+        i++
+    }
+    val cleaned = textOut.joinToString("\n").replace(Regex("\n{3,}"), "\n\n").trim()
+    return files to cleaned
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
@@ -837,22 +873,92 @@ fun ChatScreen(
                             items(count = feedItems.size, key = { feedItems[it].key }) { fIdx ->
                                 when (val item = feedItems[fIdx]) {
                                     is ChatFeedItem.UserBubble -> {
-                                        Row(modifier = Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.End) {
-                                            Surface(
-                                                shape = RoundedCornerShape(18.dp),
-                                                color = MaterialTheme.colorScheme.primaryContainer,
-                                                modifier = Modifier
-                                                    .widthIn(max = 310.dp)
-                                                    .clip(RoundedCornerShape(18.dp))
-                                                    .combinedClickable(onClick = {}, onLongClick = { contextMenuMsg = item.msg })
-                                            ) {
-                                                Text(
-                                                    text = item.msg.content,
-                                                    fontSize = settings.fontSizeSp.sp,
-                                                    lineHeight = (settings.fontSizeSp + 6).sp,
-                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                                                )
+                                        val (attFiles, cleanUserText) = remember(item.msg.id, item.msg.content) {
+                                            splitUserAttachments(item.msg.content)
+                                        }
+                                        var userExpanded by remember(item.msg.id) { mutableStateOf(false) }
+                                        val isLongUser = cleanUserText.length > 700 || cleanUserText.count { it == '\n' } > 12
+                                        val shownUserText = remember(cleanUserText, isLongUser, userExpanded) {
+                                            if (!isLongUser || userExpanded) cleanUserText
+                                            else cleanUserText.lineSequence().take(10).joinToString("\n").take(600) + "…"
+                                        }
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                                            horizontalAlignment = Alignment.End
+                                        ) {
+                                            if (attFiles.isNotEmpty()) {
+                                                Column(
+                                                    horizontalAlignment = Alignment.End,
+                                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                                    modifier = Modifier.padding(bottom = if (shownUserText.isNotBlank()) 6.dp else 0.dp)
+                                                ) {
+                                                    attFiles.forEach { (fName, fBody) ->
+                                                        val kb = (fBody.length / 1024).let { if (it > 0) "${it} КБ" else "${fBody.length} симв." }
+                                                        Surface(
+                                                            shape = RoundedCornerShape(12.dp),
+                                                            color = MaterialTheme.colorScheme.surface,
+                                                            border = BorderStroke(1.dp, DeepSeekBlue.copy(alpha = 0.35f)),
+                                                            modifier = Modifier
+                                                                .widthIn(max = 290.dp)
+                                                                .clip(RoundedCornerShape(12.dp))
+                                                                .combinedClickable(
+                                                                    onClick = { selectTextMsg = Message(role = "user", content = "$fName\n\n$fBody") },
+                                                                    onLongClick = { contextMenuMsg = item.msg }
+                                                                )
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Text("📎", fontSize = 13.sp)
+                                                                Spacer(Modifier.width(6.dp))
+                                                                Text(
+                                                                    text = fName,
+                                                                    fontSize = 12.5.sp,
+                                                                    fontWeight = FontWeight.Medium,
+                                                                    maxLines = 1,
+                                                                    overflow = TextOverflow.Ellipsis,
+                                                                    modifier = Modifier.weight(1f, fill = false)
+                                                                )
+                                                                Spacer(Modifier.width(6.dp))
+                                                                Text(
+                                                                    text = kb,
+                                                                    fontSize = 11.5.sp,
+                                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if (shownUserText.isNotBlank()) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(18.dp),
+                                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                                    modifier = Modifier
+                                                        .widthIn(max = 310.dp)
+                                                        .clip(RoundedCornerShape(18.dp))
+                                                        .combinedClickable(onClick = {}, onLongClick = { contextMenuMsg = item.msg })
+                                                ) {
+                                                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                                                        Text(
+                                                            text = shownUserText,
+                                                            fontSize = settings.fontSizeSp.sp,
+                                                            lineHeight = (settings.fontSizeSp + 6).sp,
+                                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                        )
+                                                        if (isLongUser) {
+                                                            Spacer(Modifier.height(4.dp))
+                                                            Text(
+                                                                text = if (userExpanded) "▲ Свернуть" else "▼ Показать весь текст (${cleanUserText.length} симв.)",
+                                                                fontSize = 11.5.sp,
+                                                                fontWeight = FontWeight.Medium,
+                                                                color = DeepSeekBlue,
+                                                                modifier = Modifier.clickable { userExpanded = !userExpanded }
+                                                            )
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }

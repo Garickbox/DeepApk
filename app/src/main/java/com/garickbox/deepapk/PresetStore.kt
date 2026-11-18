@@ -35,7 +35,7 @@ data class PromptPreset(
 object PresetStore {
     private val lock = Any()
     private const val PREF_NAME = "deepapk_presets_meta"
-    private const val CURRENT_VER = 2
+    private const val CURRENT_VER = 3
     private val CORE_IDS = setOf("default", "termux", "docx_report")
     private val REMOVED_BUILTIN_IDS = setOf("patch_dev", "writer", "study", "translator", "concise")
 
