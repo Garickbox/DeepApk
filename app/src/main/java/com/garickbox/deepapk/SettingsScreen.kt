@@ -55,6 +55,8 @@ fun SettingsScreen(
     var showFontDialog by remember { mutableStateOf(false) }
     var showParamsDialog by remember { mutableStateOf(false) }
     var showPromptDialog by remember { mutableStateOf(false) }
+    var showProxyDialog by remember { mutableStateOf(false) }
+    var keyLinkMeta by remember { mutableStateOf<ProviderMeta?>(null) }
 
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         termuxPermGranted = granted || TermuxBridge.hasRunPermission(ctx)
@@ -122,64 +124,33 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 4.dp)
         ) {
-            SectionLabel("Профиль")
+            val pMeta = ModelCatalog.findProvider(draft.provider)
+            val mMeta = ModelCatalog.findModel(draft.provider, draft.activeModelLabel())
+            val activeK = draft.activeKey()
+            SectionLabel("Выбор ИИ")
             SettingsCard(cardBg) {
-                SettingsRow(
-                    icon = "💰",
-                    title = "Баланс DeepSeek",
-                    value = balance,
-                    onClick = {
-                        if (draft.apiKey.isNotBlank()) {
-                            balance = "Обновление…"
-                            scope.launch {
-                                balance = withContext(Dispatchers.IO) {
-                                    DeepSeekApi.fetchBalance(draft.apiKey)?.text ?: "Ошибка"
-                                }
-                            }
-                        }
-                    }
-                )
+                SettingsRow("⚡", "Активный ИИ", draft.providerLabel()) { showProviderDialog = true }
                 HorizontalDivider(color = dividerCol)
-                SettingsRow(
-                    icon = "⚡",
-                    title = "Активный ИИ",
-                    value = if (draft.provider == "gemini") "Google Gemini" else "DeepSeek",
-                    onClick = { showProviderDialog = true }
-                )
+                SettingsRow("💎", "Модель (нажми)", draft.activeModelLabel()) { showModelDialog = true }
+                if (mMeta != null) Text("${mMeta.tag} · ${mMeta.fitsFor}", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 44.dp, end = 14.dp, bottom = 10.dp))
             }
-
             Spacer(Modifier.height(14.dp))
-            SectionLabel("Провайдеры и API")
+            SectionLabel("Ключ: ${pMeta.title}")
             SettingsCard(cardBg) {
-                SettingsRow(
-                    icon = "🔑",
-                    title = "Ключ DeepSeek",
-                    value = if (draft.apiKey.isBlank()) "Не задан" else "sk-•••${draft.apiKey.takeLast(4)}",
-                    onClick = { showDeepSeekKeyDialog = true }
-                )
+                if (draft.provider == "deepseek") {
+                    SettingsRow("💰", "Баланс DeepSeek", balance) {
+                        if (draft.apiKey.isNotBlank()) { balance = "Обновление…"; scope.launch { balance = withContext(Dispatchers.IO) { DeepSeekApi.fetchBalance(draft.apiKey)?.text ?: "Ошибка" } } }
+                    }
+                    HorizontalDivider(color = dividerCol)
+                }
+                if (draft.provider == "custom") {
+                    SettingsRow("🔗", "Base URL", draft.customBaseUrl.removePrefix("https://")) { showProxyDialog = true }
+                    HorizontalDivider(color = dividerCol)
+                }
+                SettingsRow("🔑", "API-ключ", if (activeK.isBlank()) "Не задан" else "${activeK.take(4)}•••${activeK.takeLast(4)}") { showDeepSeekKeyDialog = true }
                 HorizontalDivider(color = dividerCol)
-                SettingsRow(
-                    icon = "🤖",
-                    title = "Модель DeepSeek",
-                    value = draft.model,
-                    onClick = { showModelDialog = true }
-                )
-                HorizontalDivider(color = dividerCol)
-                SettingsRow(
-                    icon = "✦",
-                    title = "Ключ Google Gemini",
-                    value = if (draft.geminiApiKey.isBlank()) "Не задан" else "${draft.geminiApiKey.take(4)}•••${draft.geminiApiKey.takeLast(4)}",
-                    onClick = { showGeminiKeyDialog = true }
-                )
-                HorizontalDivider(color = dividerCol)
-                SettingsRow(
-                    icon = "💎",
-                    title = "Модель Gemini",
-                    value = draft.geminiModel,
-                    onClick = { showGeminiModelDialog = true }
-                )
+                SettingsRow("🌐", "Получить ключ", pMeta.keyUrl.removePrefix("https://")) { keyLinkMeta = pMeta }
             }
-
             Spacer(Modifier.height(14.dp))
             SectionLabel("Приложение")
             SettingsCard(cardBg) {
@@ -199,8 +170,8 @@ fun SettingsScreen(
                 HorizontalDivider(color = dividerCol)
                 SettingsRow(
                     icon = "🎛",
-                    title = "Temperature / Max tokens",
-                    value = "${"%.1f".format(draft.temperature)} · ${draft.maxTokens / 1024}K",
+                    title = "Параметры (код / текст)",
+                    value = "T=${"%.1f".format(draft.temperature)} (${if (draft.temperature <= 0.35f) "Код" else if (draft.temperature <= 0.85f) "Баланс" else "Текст"}) · ${draft.maxTokens / 1024}K",
                     onClick = { showParamsDialog = true }
                 )
                 HorizontalDivider(color = dividerCol)
@@ -326,148 +297,22 @@ fun SettingsScreen(
     }
 
     if (showProviderDialog) {
-        val providers = listOf("deepseek" to "DeepSeek API", "gemini" to "Google Gemini API")
-        ChoiceDialog(
-            title = "Активный ИИ",
-            items = providers,
-            selected = draft.provider,
-            onSelect = {
-                saveNow(draft.copy(provider = it))
-                showProviderDialog = false
-            },
-            onDismiss = { showProviderDialog = false }
-        )
+        ProviderGuideDialog(draft.provider, { saveNow(draft.copy(provider = it)); showProviderDialog = false }, { keyLinkMeta = it }, { showProviderDialog = false })
     }
-
     if (showDeepSeekKeyDialog) {
-        KeyInputDialog(
-            title = "Ключ DeepSeek",
-            initial = draft.apiKey,
-            placeholder = "sk-...",
-            onSave = {
-                saveNow(draft.copy(apiKey = it))
-                showDeepSeekKeyDialog = false
-            },
-            onDismiss = { showDeepSeekKeyDialog = false }
-        )
+        val pm = ModelCatalog.findProvider(draft.provider)
+        KeyInputDialog("Ключ: ${pm.title}", draft.activeKey(), pm.keyHint, { saveNow(draft.withActiveKey(it)); showDeepSeekKeyDialog = false }, { showDeepSeekKeyDialog = false })
     }
-
-    if (showGeminiKeyDialog) {
-        KeyInputDialog(
-            title = "Ключ Google Gemini",
-            initial = draft.geminiApiKey,
-            placeholder = "AIza... или AQ...",
-            onSave = {
-                saveNow(draft.copy(geminiApiKey = it))
-                showGeminiKeyDialog = false
-            },
-            onDismiss = { showGeminiKeyDialog = false }
-        )
-    }
-
     if (showModelDialog) {
-        ChoiceDialog(
-            title = "Модель DeepSeek",
-            items = listOf(
-                "deepseek-flash" to "deepseek-flash (быстрая + поиск)",
-                "deepseek-v4-pro" to "deepseek-v4-pro (мощнее)",
-                "deepseek-chat" to "deepseek-chat (стандарт)",
-                "deepseek-reasoner" to "deepseek-reasoner (R1)"
-            ),
-            selected = draft.model,
-            onSelect = {
-                saveNow(draft.copy(model = it))
-                showModelDialog = false
-            },
-            onDismiss = { showModelDialog = false }
-        )
+        RichModelDialog(draft.provider, draft.activeModelLabel(), { saveNow(draft.withActiveModel(it)); showModelDialog = false }, { keyLinkMeta = ModelCatalog.findProvider(draft.provider) }, { showModelDialog = false })
     }
-
-    if (showGeminiModelDialog) {
-        ChoiceDialog(
-            title = "Модель Google Gemini",
-            items = listOf(
-                "gemini-3-flash-preview" to "gemini-3-flash-preview (быстрая + thinking)",
-                "gemini-3.1-flash-lite" to "gemini-3.1-flash-lite (лёгкая, Free Tier)",
-                "gemini-3.8-flash" to "gemini-3.8-flash (бывает 503)",
-                "gemini-3.1-pro-preview" to "gemini-3.1-pro-preview (Pro, биллинг)"
-            ),
-            selected = draft.geminiModel,
-            onSelect = {
-                saveNow(draft.copy(geminiModel = it))
-                showGeminiModelDialog = false
-            },
-            onDismiss = { showGeminiModelDialog = false }
-        )
+    if (showProxyDialog) {
+        CustomProxyDialog(draft.customBaseUrl, { saveNow(draft.copy(customBaseUrl = it)); showProxyDialog = false }, { showProxyDialog = false })
     }
-
-    if (showThemeDialog) {
-        ChoiceDialog(
-            title = "Внешний вид",
-            items = listOf(
-                "system" to "Как в системе",
-                "light" to "Светлая",
-                "dark" to "Тёмная"
-            ),
-            selected = draft.themeMode,
-            onSelect = {
-                saveNow(draft.copy(themeMode = it))
-                onThemeChange(it)
-                showThemeDialog = false
-            },
-            onDismiss = { showThemeDialog = false }
-        )
-    }
-
-    if (showFontDialog) {
-        ChoiceDialog(
-            title = "Размер шрифта",
-            items = listOf(
-                "13" to "Мелкий (13 sp)",
-                "15" to "Обычный (15 sp)",
-                "17" to "Крупный (17 sp)"
-            ),
-            selected = draft.fontSizeSp.toString(),
-            onSelect = {
-                saveNow(draft.copy(fontSizeSp = it.toIntOrNull() ?: 15))
-                showFontDialog = false
-            },
-            onDismiss = { showFontDialog = false }
-        )
-    }
-
+    keyLinkMeta?.let { KeyLinkDialog(it) { keyLinkMeta = null } }
     if (showParamsDialog) {
-        var temp by remember { mutableStateOf(draft.temperature) }
-        var maxT by remember { mutableStateOf(draft.maxTokens) }
-        AlertDialog(
-            onDismissRequest = { showParamsDialog = false },
-            title = { Text("Параметры генерации", fontSize = 17.sp) },
-            text = {
-                Column {
-                    Text("Temperature: ${"%.2f".format(temp)}", fontSize = 13.sp)
-                    Slider(value = temp, onValueChange = { temp = it }, valueRange = 0f..2f)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Max output tokens: $maxT", fontSize = 13.sp)
-                    Slider(
-                        value = maxT.toFloat(),
-                        onValueChange = { maxT = it.toInt() },
-                        valueRange = 1024f..131072f,
-                        steps = 127
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    saveNow(draft.copy(temperature = temp, maxTokens = maxT))
-                    showParamsDialog = false
-                }) { Text("Сохранить") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showParamsDialog = false }) { Text("Отмена") }
-            }
-        )
+        ParamsCodeDialog(draft.temperature, draft.maxTokens, { tp, mt -> saveNow(draft.copy(temperature = tp, maxTokens = mt)); showParamsDialog = false }, { showParamsDialog = false })
     }
-
     if (showPromptDialog) {
         var prompt by remember { mutableStateOf(draft.systemPrompt) }
         AlertDialog(

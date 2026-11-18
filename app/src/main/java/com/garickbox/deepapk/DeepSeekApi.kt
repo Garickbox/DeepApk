@@ -83,55 +83,49 @@ object DeepSeekApi {
             )
         }
 
-        if (settings.provider == "gemini") {
-            callRef = streamGemini(settings, prepared)
-        } else {
-            callRef = streamDeepSeek(settings, prepared)
+        callRef = when (settings.provider) {
+            "gemini" -> streamGemini(settings, prepared)
+            "openrouter" -> streamOpenAiCompat(settings, prepared, "https://openrouter.ai/api/v1/chat/completions", settings.openrouterApiKey, settings.openrouterModel, false, true)
+            "groq" -> streamOpenAiCompat(settings, prepared, "https://api.groq.com/openai/v1/chat/completions", settings.groqApiKey, settings.groqModel, false, false)
+            "custom" -> {
+                val base = settings.customBaseUrl.trim().trimEnd('/')
+                val u = if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
+                streamOpenAiCompat(settings, prepared, u, settings.customApiKey, settings.customModel, false, false)
+            }
+            else -> streamOpenAiCompat(settings, prepared, "https://api.deepseek.com/chat/completions", settings.apiKey, if (settings.webSearchEnabled) "deepseek-flash" else settings.model, true, false)
         }
-
         close()
         awaitClose { callRef?.cancel() }
     }.flowOn(Dispatchers.IO)
 
-    private fun ProducerScope<StreamEvent>.streamDeepSeek(
-        settings: AppSettings,
-        history: List<Message>
-    ): Call {
+    private fun ProducerScope<StreamEvent>.streamOpenAiCompat(
+        settings: AppSettings, history: List<Message>, endpointUrl: String,
+        rawKey: String, modelName: String, isDeepSeek: Boolean, isOpenRouter: Boolean
+    ): Call? {
+        val key = rawKey.trim()
+        if (key.isBlank()) { trySend(StreamEvent.Error("Не задан API-ключ (${settings.providerLabel()})")); return null }
+        if (!endpointUrl.startsWith("http")) { trySend(StreamEvent.Error("Неверный Base URL")); return null }
         val arr = JSONArray()
-        if (settings.systemPrompt.isNotBlank()) {
-            arr.put(JSONObject().put("role", "system").put("content", settings.systemPrompt))
-        }
+        if (settings.systemPrompt.isNotBlank()) arr.put(JSONObject().put("role", "system").put("content", settings.systemPrompt))
         history.forEach { arr.put(JSONObject().put("role", it.role).put("content", it.content)) }
-
-        val effectiveModel = if (settings.webSearchEnabled) "deepseek-flash" else settings.model
         val root = JSONObject()
-            .put("model", effectiveModel)
-            .put("messages", arr)
-            .put("stream", true)
+            .put("model", modelName.ifBlank { "deepseek-chat" }).put("messages", arr).put("stream", true)
             .put("temperature", settings.temperature.toDouble())
-            .put("max_tokens", settings.maxTokens)
-            .put("stream_options", JSONObject().put("include_usage", true))
-
-        if (settings.thinkingEnabled) {
-            root.put("thinking", JSONObject().put("type", "enabled"))
-        } else {
-            root.put("thinking", JSONObject().put("type", "disabled"))
+            .put("max_tokens", if (isDeepSeek) settings.maxTokens else settings.maxTokens.coerceAtMost(32768))
+        if (isDeepSeek) {
+            root.put("stream_options", JSONObject().put("include_usage", true))
+            root.put("thinking", JSONObject().put("type", if (settings.thinkingEnabled) "enabled" else "disabled"))
+            if (settings.webSearchEnabled) {
+                val tools = JSONArray()
+                tools.put(JSONObject().put("type", "deepseek_web_search"))
+                tools.put(JSONObject().put("type", "deepseek_read_url"))
+                root.put("tools", tools)
+            }
         }
-
-        if (settings.webSearchEnabled) {
-            val tools = JSONArray()
-            tools.put(JSONObject().put("type", "deepseek_web_search"))
-            tools.put(JSONObject().put("type", "deepseek_read_url"))
-            root.put("tools", tools)
-        }
-
         val body = root.toString().toRequestBody("application/json".toMediaType())
-        val req = Request.Builder()
-            .url("https://api.deepseek.com/chat/completions")
-            .header("Authorization", "Bearer ${settings.apiKey.trim()}")
-            .header("Content-Type", "application/json")
-            .post(body)
-            .build()
+        val rb = Request.Builder().url(endpointUrl).header("Authorization", "Bearer $key").header("Content-Type", "application/json")
+        if (isOpenRouter) rb.header("HTTP-Referer", "https://github.com/Garickbox/DeepApk").header("X-Title", "DeepApk")
+        val req = rb.post(body).build()
 
         val call = client.newCall(req)
         var lastUsage = ""
@@ -140,7 +134,7 @@ object DeepSeekApi {
             call.execute().use { resp ->
                 if (!resp.isSuccessful) {
                     val err = resp.body?.string()?.take(800) ?: ""
-                    trySend(StreamEvent.Error("DeepSeek API ${resp.code}: $err"))
+                    trySend(StreamEvent.Error("${settings.providerLabel()} ${resp.code}: $err"))
                 } else {
                     val stream = resp.body?.byteStream()
                     if (stream == null) {
@@ -178,7 +172,7 @@ object DeepSeekApi {
                                     val finishReason = choice.optString("finish_reason", "")
                                     if (finishReason == "length") truncated = true
                                     val delta = choice.optJSONObject("delta") ?: continue
-                                    val reasoning = delta.optString("reasoning_content", "")
+                                    val reasoning = delta.optString("reasoning_content", "").ifBlank { delta.optString("reasoning", "") }
                                     if (reasoning.isNotEmpty() && reasoning != "null") {
                                         trySend(StreamEvent.Reasoning(reasoning))
                                     }

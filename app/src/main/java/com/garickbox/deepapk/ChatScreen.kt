@@ -530,54 +530,24 @@ fun ChatScreen(
     }
 
     if (settings.activeKey().isBlank()) {
-        val isGem = settings.provider == "gemini"
-        Column(
-            Modifier.fillMaxSize().padding(24.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(DeepSeekBlue),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(if (isGem) "G" else "DS", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        val pm = ModelCatalog.findProvider(settings.provider)
+        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.size(56.dp).clip(RoundedCornerShape(16.dp)).background(DeepSeekBlue), contentAlignment = Alignment.Center) {
+                Text(settings.providerShort().take(2), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(14.dp))
-            Text(if (isGem) "Google Gemini" else "DeepSeek", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(pm.title, fontSize = 21.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
-            Text(
-                if (isGem) "Введите API-ключ из Google AI Studio" else "Введите API-ключ с platform.deepseek.com",
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(16.dp))
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-                placeholder = { Text(if (isGem) "AIza..." else "sk-...") }
-            )
+            Text("Ключ: ${pm.keyUrl.removePrefix("https://")}", fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(14.dp))
+            OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(14.dp), placeholder = { Text(pm.keyHint) })
             Spacer(Modifier.height(12.dp))
             Button(
-                onClick = {
-                    if (input.isNotBlank()) {
-                        val s = if (isGem) settings.copy(geminiApiKey = input.trim())
-                        else settings.copy(apiKey = input.trim())
-                        SettingsStore.save(ctx, s)
-                        settings = s
-                        input = ""
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(14.dp)
+                onClick = { if (input.isNotBlank()) { val s = settings.withActiveKey(input); SettingsStore.save(ctx, s); settings = s; input = "" } },
+                modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(14.dp)
             ) { Text("Начать работу") }
             Spacer(Modifier.height(10.dp))
-            TextButton(onClick = onOpenSettings) { Text("Открыть настройки") }
+            TextButton(onClick = onOpenSettings) { Text("Выбрать ИИ / Настройки") }
         }
         return
     }
@@ -706,7 +676,7 @@ fun ChatScreen(
                         Column(Modifier.weight(1f)) {
                             Text("DeepApk · ${BuildConfig.VERSION_NAME}", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                             Text(
-                                if (balanceText.isNotBlank()) "Баланс: $balanceText"
+                                if (settings.provider == "deepseek" && balanceText.isNotBlank()) "Баланс: $balanceText"
                                 else settings.activeModelLabel(),
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -822,29 +792,24 @@ fun ChatScreen(
                         }
                     }
 
-                    // Quick 1-tap provider switch (DeepSeek / Gemini)
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        modifier = Modifier
-                            .padding(end = 8.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable {
-                                if (!streaming) {
-                                    val next = if (settings.provider == "gemini") "deepseek" else "gemini"
-                                    val updated = settings.copy(provider = next)
-                                    settings = updated
-                                    SettingsStore.save(ctx, updated)
-                                }
+                    var showProvMenu by remember { mutableStateOf(false) }
+                    Box(Modifier.padding(end = 8.dp)) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable { if (!streaming) showProvMenu = true }
+                        ) {
+                            Text(settings.providerShort(), fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = DeepSeekBlue, modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp))
+                        }
+                        DropdownMenu(expanded = showProvMenu, onDismissRequest = { showProvMenu = false }) {
+                            AppSettings.ALL_PROVIDERS.forEach { pid ->
+                                val mark = if (settings.hasKey(pid)) "✓" else "нет ключа"
+                                DropdownMenuItem(
+                                    text = { Text("${settings.providerLabel(pid)} ($mark)", fontSize = 13.sp) },
+                                    onClick = { showProvMenu = false; val u = settings.copy(provider = pid); settings = u; SettingsStore.save(ctx, u) }
+                                )
                             }
-                    ) {
-                        Text(
-                            text = if (settings.provider == "gemini") "✦ Gemini" else "DS",
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = DeepSeekBlue,
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
-                        )
+                            DropdownMenuItem(text = { Text("⚙ Настройки и ключи", fontSize = 13.sp, color = DeepSeekBlue) }, onClick = { showProvMenu = false; onOpenSettings() })
+                        }
                     }
 
                     Box(
@@ -992,7 +957,7 @@ fun ChatScreen(
                             DeepWhaleLogo(sizeDp = 56, isGemini = settings.provider == "gemini", cornerDp = 16)
                             Spacer(Modifier.height(14.dp))
                             Text(
-                                if (settings.provider == "gemini") "Привет! Я Gemini" else "Привет! Я DeepSeek",
+                                "Привет! Я ${settings.providerLabel()}",
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold
                             )
