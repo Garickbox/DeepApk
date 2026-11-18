@@ -40,9 +40,6 @@ notif "🚀 Patch start" "$MSG" 1000
     say "⚠️ jec_uber7.py не найден — пропускаем"
   fi
 
-  # Локальная сборка убрана: на Termux она почти всегда падает на AAPT2/памяти.
-  # Вместо неё — сразу check → push → CI.
-
   echo "═══ 3. check ═══"
   toast "3/5 check"
   if [ -f ~/jec_check.sh ]; then
@@ -78,35 +75,47 @@ notif "🚀 Patch start" "$MSG" 1000
     vib 300; exit 1
   fi
 
-  echo "═══ 5. watch CI + ошибка в терминал ═══"
-  toast "5/5 CI"
-  sleep 5
-
+  echo "═══ 5. watch CI + ожидание до конца + ошибка в терминал ═══"
+  toast "5/5 CI (ждём завершения)"
   REPO="Garickbox/DeepApk"
-  # Получаем последний раннер
+
+  # Получаем ID последнего раннера
   RUN_DATA=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/runs?per_page=1")
   RUN_ID=$(echo "$RUN_DATA" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('workflow_runs',[{}])[0].get('id') if d.get('workflow_runs') else '')")
   [ -z "$RUN_ID" ] && { say "❌ Не удалось получить раннер"; exit 1; }
 
-  RUN_INFO=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID")
-  STATUS=$(echo "$RUN_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status'))")
-  CONCLUSION=$(echo "$RUN_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('conclusion'))")
+  RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
+  echo "👉 Раннер: $RUN_URL"
 
-  echo "ℹ️ status=$STATUS | conclusion=$CONCLUSION"
+  # Цикл ожидания до завершения сборки
+  while true; do
+    RUN_INFO=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID")
+    STATUS=$(echo "$RUN_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status'))")
+    CONCLUSION=$(echo "$RUN_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('conclusion'))")
 
-  if [ "$STATUS" = "completed" ]; then
-    if [ "$CONCLUSION" = "success" ]; then
-      say "✅ Сборка OK"
-      notif "✅ CI Success" "Build passed" 1000
-      vib 200
-    else
-      say "❌ Сборка упала"
-      notif "❌ CI Failure" "Check logs" 1000
-      vib 500
+    echo "ℹ️ status=$STATUS | conclusion=$CONCLUSION"
 
-      JOBS_URL=$(echo "$RUN_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('jobs_url'))")
-      JOBS=$(curl -s -H "Authorization: Bearer $TOKEN" "$JOBS_URL")
-      FAILED_JOB=$(echo "$JOBS" | python3 -c "
+    if [ "$STATUS" = "completed" ]; then
+      break
+    fi
+
+    say "⏳ Ещё идёт, ждём..."
+    sleep 10
+  done
+
+  # Теперь точно финал: показываем результат
+  if [ "$CONCLUSION" = "success" ]; then
+    say "✅ Сборка OK"
+    notif "✅ CI Success" "Build passed" 1000
+    vib 200
+  else
+    say "❌ Сборка упала"
+    notif "❌ CI Failure" "Check logs" 1000
+    vib 500
+
+    JOBS_URL=$(echo "$RUN_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('jobs_url'))")
+    JOBS=$(curl -s -H "Authorization: Bearer $TOKEN" "$JOBS_URL")
+    FAILED_JOB=$(echo "$JOBS" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 for j in d.get('jobs', []):
@@ -115,28 +124,23 @@ for j in d.get('jobs', []):
     break
 ")
 
-      if [ -n "$FAILED_JOB" ]; then
-        JOB_NAME=$(echo "$FAILED_JOB" | cut -d'|' -f1)
-        JOB_URL=$(echo "$FAILED_JOB" | cut -d'|' -f2)
-        JOB_ID=$(echo "$JOB_URL" | python3 -c "import sys,re; u=sys.stdin.read(); m=re.search(r'/jobs/(\d+)',u); print(m.group(1) if m else '')")
+    if [ -n "$FAILED_JOB" ]; then
+      JOB_NAME=$(echo "$FAILED_JOB" | cut -d'|' -f1)
+      JOB_URL=$(echo "$FAILED_JOB" | cut -d'|' -f2)
+      JOB_ID=$(echo "$JOB_URL" | python3 -c "import sys,re; u=sys.stdin.read(); m=re.search(r'/jobs/(\d+)',u); print(m.group(1) if m else '')")
 
-        echo "❌ Упал job: $JOB_NAME"
-        if [ -n "$JOB_ID" ]; then
-          LOGS=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/jobs/$JOB_ID/logs")
-          echo "--- фрагмент ошибки (как в твоём примере) ---"
-          # Ищем ключевые строки и показываем их прямо в терминале
-          echo "$LOGS" | grep -E "FAILURE|Execution failed|Caused by|e: " -A 3 -B 3 | head -n 20
-          echo "--- конец фрагмента ---"
-        else
-          echo "👉 Лог: $JOB_URL"
-        fi
+      echo "❌ Упал job: $JOB_NAME"
+      if [ -n "$JOB_ID" ]; then
+        LOGS=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/jobs/$JOB_ID/logs")
+        echo "--- фрагмент ошибки (как в твоём примере) ---"
+        echo "$LOGS" | grep -E "FAILURE|Execution failed|Caused by|e: " -A 3 -B 3 | head -n 20
+        echo "--- конец фрагмента ---"
       else
-        echo "⚠️ Не удалось найти упавший job — смотри вручную на GitHub Actions"
+        echo "👉 Лог: $JOB_URL"
       fi
+    else
+      echo "⚠️ Не удалось найти упавший job — смотри вручную на GitHub Actions"
     fi
-  else
-    say "⏳ Сборка ещё идёт"
-    notif "⏳ CI Running" "Status: $STATUS" 1000
   fi
 } 2>&1 | tee "$LOG"
 termux-clipboard-set < "$LOG" || true
