@@ -21,7 +21,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
@@ -38,7 +37,6 @@ fun SettingsScreen(onBack: () -> Unit) {
 
         Field("DeepSeek API Key (platform.deepseek.com)", draft.apiKey) { draft = draft.copy(apiKey = it) }
 
-
         Spacer(Modifier.height(8.dp))
         Text("Модель:", fontSize = 13.sp)
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -50,7 +48,6 @@ fun SettingsScreen(onBack: () -> Unit) {
             Text("deepseek-v4-pro (V4, мощнее, без vision)", fontSize = 12.sp)
         }
 
-
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = draft.thinkingEnabled, onCheckedChange = { draft = draft.copy(thinkingEnabled = it) })
@@ -61,11 +58,9 @@ fun SettingsScreen(onBack: () -> Unit) {
             Text("Веб-поиск DeepSeek (встроенный, deepseek-flash)", fontSize = 13.sp)
         }
 
-
         Spacer(Modifier.height(8.dp))
         Text("Temperature: ${"%.2f".format(draft.temperature)}", fontSize = 13.sp)
         Slider(value = draft.temperature, onValueChange = { draft = draft.copy(temperature = it) }, valueRange = 0f..2f)
-
 
         Spacer(Modifier.height(8.dp))
         Text("Max output tokens: ${draft.maxTokens}", fontSize = 13.sp)
@@ -87,33 +82,34 @@ fun SettingsScreen(onBack: () -> Unit) {
             OutlinedButton(
                 onClick = {
                     checking = true; msg = ""
-            scope.launch {
-                val info = withContext(Dispatchers.IO) { UpdateChecker.check() }
-                checking = false
-                if (info == null) msg = "Не удалось проверить обновления"
-                else if (info.latestVersion == BuildConfig.VERSION_NAME) msg = "Уже последняя версия"
-                else update = info
-            }
+                    scope.launch {
+                        val info = withContext(Dispatchers.IO) { UpdateChecker.check() }
+                        checking = false
+                        if (info == null) msg = "Не удалось проверить обновления"
+                        else if (info.latestVersion == BuildConfig.VERSION_NAME) msg = "Уже последняя версия"
+                        else update = info
+                    }
                 },
                 enabled = !checking
             ) { Text(if (checking) "Проверяю…" else "🔄 Обновить") }
         }
         if (msg.isNotBlank()) Text(msg, color = Color.Green, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
 
-
         update?.let { u ->
             Spacer(Modifier.height(12.dp))
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp)) {
                     Text("Доступна версия ${u.latestVersion}", fontSize = 14.sp)
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-            val i = Intent(Intent.ACTION_VIEW, Uri.parse(u.apkUrl))
-            runCatching { ctx.startActivity(i) }
-            Toast.makeText(ctx, "Скачивание APK…", Toast.LENGTH_SHORT).show()
-        }) { Text("Скачать APK") }
-                OutlinedButton(onClick = { update = null }) { Text("Позже") }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            val i = Intent(Intent.ACTION_VIEW, Uri.parse(u.apkUrl))
+                            runCatching { ctx.startActivity(i) }
+                            Toast.makeText(ctx, "Скачивание APK…", Toast.LENGTH_SHORT).show()
+                        }) { Text("Скачать APK") }
+                        OutlinedButton(onClick = { update = null }) { Text("Позже") }
+                    }
+                }
             }
         }
     }
