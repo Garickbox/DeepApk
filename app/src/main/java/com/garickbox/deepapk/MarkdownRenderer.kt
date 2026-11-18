@@ -37,7 +37,17 @@ sealed class MdBlock {
     data class Bullet(val marker: String, val text: String) : MdBlock()
     data class Quote(val text: String) : MdBlock()
     data class Code(val lang: String, val code: String) : MdBlock()
+    data class Table(val headers: List<String>, val rows: List<List<String>>, val rawMd: String) : MdBlock()
     object Divider : MdBlock()
+}
+
+private val TABLE_SEP_REGEX = Regex("^\\s*\\|?(?:\\s*:?-{2,}:?\\s*\\|)+\\s*:?-{2,}:?\\s*\\|?\\s*$")
+
+private fun splitTableRow(line: String): List<String> {
+    var s = line.trim()
+    if (s.startsWith("|")) s = s.drop(1)
+    if (s.endsWith("|")) s = s.dropLast(1)
+    return s.split("|").map { it.trim() }
 }
 
 fun parseMarkdownBlocks(input: String): List<MdBlock> {
@@ -97,7 +107,9 @@ fun parseMarkdownBlocks(input: String): List<MdBlock> {
         return line.substring(idx).isBlank()
     }
 
-    for (line in lines) {
+    var li = 0
+    while (li < lines.size) {
+        val line = lines[li]
         if (inFence) {
             if (isFenceClose(line, fenceChar, fenceLen)) {
                 out.add(MdBlock.Code(fenceLang, codeLines.joinToString("\n")))
@@ -106,6 +118,7 @@ fun parseMarkdownBlocks(input: String): List<MdBlock> {
             } else {
                 codeLines.add(line)
             }
+            li++
             continue
         }
 
@@ -117,6 +130,25 @@ fun parseMarkdownBlocks(input: String): List<MdBlock> {
             fenceChar = open.first
             fenceLen = open.second
             fenceLang = open.third
+            li++
+            continue
+        }
+
+        if (line.contains("|") && li + 1 < lines.size && TABLE_SEP_REGEX.matches(lines[li + 1])) {
+            flushPara()
+            flushQuote()
+            val rawLines = mutableListOf(line, lines[li + 1])
+            val headers = splitTableRow(line)
+            val rows = mutableListOf<List<String>>()
+            var j = li + 2
+            while (j < lines.size && lines[j].contains("|") && lines[j].isNotBlank()) {
+                if (detectFenceOpen(lines[j]) != null) break
+                rawLines.add(lines[j])
+                rows.add(splitTableRow(lines[j]))
+                j++
+            }
+            out.add(MdBlock.Table(headers, rows, rawLines.joinToString("\n")))
+            li = j
             continue
         }
 
@@ -124,6 +156,7 @@ fun parseMarkdownBlocks(input: String): List<MdBlock> {
         if (trimmed.isEmpty()) {
             flushPara()
             flushQuote()
+            li++
             continue
         }
 
@@ -131,6 +164,7 @@ fun parseMarkdownBlocks(input: String): List<MdBlock> {
             flushPara()
             flushQuote()
             out.add(MdBlock.Divider)
+            li++
             continue
         }
 
@@ -139,12 +173,14 @@ fun parseMarkdownBlocks(input: String): List<MdBlock> {
             flushPara()
             flushQuote()
             out.add(MdBlock.Heading(hMatch.groupValues[1].length, hMatch.groupValues[2].trim()))
+            li++
             continue
         }
 
         if (trimmed.startsWith(">")) {
             flushPara()
             quote.add(trimmed.removePrefix(">").trimStart())
+            li++
             continue
         } else {
             flushQuote()
@@ -154,6 +190,7 @@ fun parseMarkdownBlocks(input: String): List<MdBlock> {
         if (ulMatch != null) {
             flushPara()
             out.add(MdBlock.Bullet("•", ulMatch.groupValues[1]))
+            li++
             continue
         }
 
@@ -161,10 +198,12 @@ fun parseMarkdownBlocks(input: String): List<MdBlock> {
         if (olMatch != null) {
             flushPara()
             out.add(MdBlock.Bullet(olMatch.groupValues[1], olMatch.groupValues[2]))
+            li++
             continue
         }
 
         para.add(line)
+        li++
     }
 
     if (inFence) {
@@ -472,7 +511,8 @@ fun MarkdownMessageContent(
     isDark: Boolean,
     fontSizeSp: Int = 15,
     onCopyCode: (lang: String, code: String) -> Unit,
-    onCopyTermux: (lang: String, code: String) -> Unit
+    onCopyTermux: (lang: String, code: String) -> Unit,
+    onCopyTable: (text: String, toast: String) -> Unit = { _, _ -> }
 ) {
     val blocks = remember(content) { parseMarkdownBlocks(content) }
     val linkColor = if (isDark) Color(0xFF7FA2FF) else DeepSeekBlue
@@ -575,6 +615,77 @@ fun MarkdownMessageContent(
                         color = textColor,
                         lineHeight = (fontSizeSp + 7).sp
                     )
+                }
+
+                is MdBlock.Table -> {
+                    val cols = maxOf(block.headers.size, block.rows.maxOfOrNull { it.size } ?: 0).coerceAtLeast(1)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, codeBorder, RoundedCornerShape(12.dp))
+                            .background(codeBg)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Таблица", fontSize = 11.5.sp, color = codeHeaderText, modifier = Modifier.weight(1f))
+                            Text(
+                                "❐ Excel (TSV)",
+                                fontSize = 11.5.sp,
+                                color = DeepSeekBlue,
+                                modifier = Modifier
+                                    .clickable {
+                                        val tsv = (listOf(block.headers) + block.rows).joinToString("\n") { it.joinToString("\t") }
+                                        onCopyTable(tsv, "Таблица скопирована (TSV)")
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                            Text(
+                                "❐ MD",
+                                fontSize = 11.5.sp,
+                                color = codeHeaderText,
+                                modifier = Modifier
+                                    .clickable { onCopyTable(block.rawMd, "Таблица скопирована (MD)") }
+                                    .padding(start = 4.dp, top = 2.dp, bottom = 2.dp)
+                            )
+                        }
+                        HorizontalDivider(color = codeHeaderDivider)
+                        Column(Modifier.horizontalScroll(rememberScrollState())) {
+                            Row(Modifier.background(if (isDark) Color(0xFF23262E) else Color(0xFFECEEF3))) {
+                                for (c in 0 until cols) {
+                                    Text(
+                                        text = buildCleanInlineString(block.headers.getOrElse(c) { "" }, linkColor, inlineCodeBg),
+                                        fontSize = (fontSizeSp - 2).coerceAtLeast(11).sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = textColor,
+                                        modifier = Modifier.width(140.dp).padding(horizontal = 10.dp, vertical = 8.dp)
+                                    )
+                                }
+                            }
+                            block.rows.forEachIndexed { rIdx, row ->
+                                HorizontalDivider(color = codeHeaderDivider)
+                                Row(
+                                    Modifier.background(
+                                        if (rIdx % 2 == 1) (if (isDark) Color(0xFF1F2229) else Color(0xFFF3F4F7))
+                                        else Color.Transparent
+                                    )
+                                ) {
+                                    for (c in 0 until cols) {
+                                        Text(
+                                            text = buildCleanInlineString(row.getOrElse(c) { "" }, linkColor, inlineCodeBg),
+                                            fontSize = (fontSizeSp - 2).coerceAtLeast(11).sp,
+                                            color = textColor,
+                                            modifier = Modifier.width(140.dp).padding(horizontal = 10.dp, vertical = 7.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 is MdBlock.Code -> {

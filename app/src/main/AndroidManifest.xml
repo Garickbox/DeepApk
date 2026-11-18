@@ -10,7 +10,7 @@
     <queries>
         <package android:name="com.termux" />
     </queries>
-    <application android:label="DeepApk" android:theme="@style/Theme.DeepApk" android:usesCleartextTraffic="true">
+    <application android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:label="DeepApk" android:theme="@style/Theme.DeepApk" android:usesCleartextTraffic="true">
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

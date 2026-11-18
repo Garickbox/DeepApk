@@ -473,13 +473,19 @@ fun SettingsScreen(
             onDismissRequest = { showPromptDialog = false },
             title = { Text("Персонализация (System Prompt)", fontSize = 17.sp) },
             text = {
-                OutlinedTextField(
-                    value = prompt,
-                    onValueChange = { prompt = it },
-                    minLines = 4,
-                    maxLines = 8,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column {
+                    OutlinedTextField(
+                        value = prompt,
+                        onValueChange = { prompt = it },
+                        minLines = 5,
+                        maxLines = 9,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = { prompt = AppSettings.DEFAULT_SYSTEM_PROMPT }) {
+                        Text("Сбросить на Termux-промпт")
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = {

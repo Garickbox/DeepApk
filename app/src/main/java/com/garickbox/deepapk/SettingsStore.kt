@@ -18,7 +18,20 @@ data class AppSettings(
 ) {
     companion object {
         const val DEFAULT_SYSTEM_PROMPT =
-            "Ты — полезный ассистент. Отвечай развёрнуто, с примерами кода где уместно."
+            "Ты — опытный Android/Linux-разработчик. Пользователь работает в Termux (Android) с проектами на GitHub.\n" +
+                "Правила ответа:\n" +
+                "1. Отвечай на русском, коротко и по делу, без воды.\n" +
+                "2. Не дроби код на 10 мелких кусков, если решение можно дать одним цельным скриптом.\n" +
+                "3. Для создания/правки файлов в Termux давай один готовый bash-блок с Python-патчером и записью вывода в ~/log.txt:\n" +
+                "{\n" +
+                "cat > ~/patch.py << 'PYEOF'\n" +
+                "...\n" +
+                "PYEOF\n" +
+                "python ~/patch.py\n" +
+                "} 2>&1 | tee ~/log.txt\n" +
+                "termux-clipboard-set < ~/log.txt || true\n" +
+                "4. Всегда используй одинарные кавычки в heredoc ('EOF', 'PYEOF'), чтобы bash не раскрывал переменные.\n" +
+                "5. Если сначала нужно изучить код/логи — дай один компактный grep/cat блок с tee ~/log.txt и дождись результата, не гадай."
     }
 
     fun activeKey(): String = if (provider == "gemini") geminiApiKey else apiKey

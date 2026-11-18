@@ -36,7 +36,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -90,8 +94,10 @@ fun ChatScreen(
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     val listState = rememberLazyListState()
-    val showScrollBottom by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
+    val showScrollBottom by remember { derivedStateOf { listState.canScrollForward } }
 
     var settings by remember { mutableStateOf(SettingsStore.load(ctx)) }
     var input by remember { mutableStateOf("") }
@@ -138,6 +144,7 @@ fun ChatScreen(
     var contextMenuMsg by remember { mutableStateOf<Message?>(null) }
     var selectTextMsg by remember { mutableStateOf<Message?>(null) }
     var codePickerBlocks by remember { mutableStateOf<List<MdBlock.Code>?>(null) }
+    var showAnchorsDialog by remember { mutableStateOf(false) }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -152,6 +159,9 @@ fun ChatScreen(
 
     LaunchedEffect(Unit) {
         settings = SettingsStore.load(ctx)
+        if (messages.isNotEmpty()) {
+            listState.scrollToItem(messages.size)
+        }
         if (settings.apiKey.isNotBlank()) {
             val b = withContext(Dispatchers.IO) { DeepSeekApi.fetchBalance(settings.apiKey) }
             if (b != null) balanceText = b.text
@@ -179,6 +189,9 @@ fun ChatScreen(
         error = ""
         searchInfo = ""
         ChatStore.setActiveSessionId(ctx, session.id)
+        if (messages.isNotEmpty()) {
+            scope.launch { listState.scrollToItem(messages.size) }
+        }
     }
 
     fun createNewSession() {
@@ -213,7 +226,7 @@ fun ChatScreen(
         ChatStore.saveSessions(ctx, sessions.toList())
     }
 
-    fun startStream(continueTargetIdx: Int? = null) {
+    fun startStream(continueTargetIdx: Int? = null, scrollAnchorIdx: Int? = null) {
         if (streaming) return
         error = ""
         searchInfo = ""
@@ -231,32 +244,70 @@ fun ChatScreen(
         if (continueTargetIdx != null) {
             messages[targetIdx] = messages[targetIdx].copy(truncated = false)
         }
+        if (scrollAnchorIdx != null && scrollAnchorIdx in messages.indices) {
+            scope.launch { listState.animateScrollToItem(scrollAnchorIdx) }
+        } else if (continueTargetIdx == null && targetIdx > 0) {
+            scope.launch { listState.animateScrollToItem(targetIdx - 1) }
+        }
         streaming = true
         streamJob = scope.launch {
+            val pendingContent = StringBuilder()
+            val pendingReasoning = StringBuilder()
+            var lastFlush = 0L
+
+            fun flushDeltas(force: Boolean) {
+                if (pendingContent.isEmpty() && pendingReasoning.isEmpty()) return
+                val now = System.currentTimeMillis()
+                if (!force && now - lastFlush < 75L) return
+                val cur = messages.getOrNull(targetIdx) ?: return
+                messages[targetIdx] = cur.copy(
+                    reasoning = cur.reasoning + pendingReasoning.toString(),
+                    content = cur.content + pendingContent.toString()
+                )
+                pendingReasoning.clear()
+                pendingContent.clear()
+                lastFlush = now
+            }
+
             try {
                 DeepSeekApi.chatStream(
                     settings = settings,
                     history = historySlice,
                     continuation = continueTargetIdx != null
                 ).collect { ev ->
-                    val cur = messages.getOrNull(targetIdx) ?: return@collect
                     when (ev) {
-                        is StreamEvent.Reasoning -> messages[targetIdx] = cur.copy(reasoning = cur.reasoning + ev.delta)
-                        is StreamEvent.Content -> messages[targetIdx] = cur.copy(content = cur.content + ev.delta)
+                        is StreamEvent.Reasoning -> {
+                            pendingReasoning.append(ev.delta)
+                            flushDeltas(false)
+                        }
+                        is StreamEvent.Content -> {
+                            pendingContent.append(ev.delta)
+                            flushDeltas(false)
+                        }
                         is StreamEvent.SearchInfo -> searchInfo = "поиск ×${ev.queries}"
-                        is StreamEvent.Error -> error = ev.msg
+                        is StreamEvent.Error -> {
+                            flushDeltas(true)
+                            error = ev.msg
+                        }
                         is StreamEvent.Done -> {
-                            messages[targetIdx] = cur.copy(
-                                usage = if (ev.usage.isNotBlank()) ev.usage else cur.usage,
-                                truncated = ev.truncated
-                            )
+                            flushDeltas(true)
+                            val cur = messages.getOrNull(targetIdx)
+                            if (cur != null) {
+                                messages[targetIdx] = cur.copy(
+                                    usage = if (ev.usage.isNotBlank()) ev.usage else cur.usage,
+                                    truncated = ev.truncated
+                                )
+                            }
                         }
                     }
                 }
             } catch (_: CancellationException) {
+                flushDeltas(true)
             } catch (e: Exception) {
+                flushDeltas(true)
                 error = e.message ?: "unknown"
             } finally {
+                flushDeltas(true)
                 val last = messages.getOrNull(targetIdx)
                 if (continueTargetIdx == null && last != null && last.content.isBlank() && last.reasoning.isBlank()) {
                     messages.removeAt(targetIdx)
@@ -272,6 +323,8 @@ fun ChatScreen(
         if (streaming) return
         val typed = input.trim()
         if (typed.isEmpty() && attachments.isEmpty()) return
+        keyboardController?.hide()
+        focusManager.clearFocus()
 
         val payload = buildString {
             if (typed.isNotEmpty()) append(typed)
@@ -294,7 +347,7 @@ fun ChatScreen(
             persistCurrentSession(titlePreview)
         }
         messages.add(Message(role = "user", content = payload))
-        startStream()
+        startStream(scrollAnchorIdx = messages.size - 1)
     }
 
     fun handleSendMessageToTermux(content: String) {
@@ -478,20 +531,7 @@ fun ChatScreen(
                             .padding(horizontal = 6.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(CircleShape)
-                                .background(DeepSeekBlue),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                if (settings.provider == "gemini") "G" else "DS",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                        DeepWhaleLogo(sizeDp = 34, isGemini = settings.provider == "gemini")
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text("DeepApk · ${BuildConfig.VERSION_NAME}", fontSize = 14.sp, fontWeight = FontWeight.Medium)
@@ -629,20 +669,7 @@ fun ChatScreen(
                             verticalArrangement = Arrangement.Center,
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(52.dp)
-                                    .clip(RoundedCornerShape(15.dp))
-                                    .background(DeepSeekBlue),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    if (settings.provider == "gemini") "✦" else "DS",
-                                    color = Color.White,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                            DeepWhaleLogo(sizeDp = 56, isGemini = settings.provider == "gemini", cornerDp = 16)
                             Spacer(Modifier.height(14.dp))
                             Text(
                                 if (settings.provider == "gemini") "Привет! Я Gemini" else "Привет! Я DeepSeek",
@@ -662,15 +689,14 @@ fun ChatScreen(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(horizontal = 14.dp),
-                            reverseLayout = true,
-                            contentPadding = PaddingValues(vertical = 12.dp),
+                            reverseLayout = false,
+                            contentPadding = PaddingValues(top = 10.dp, bottom = 52.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             items(
                                 count = messages.size,
-                                key = { revIdx -> messages[messages.size - 1 - revIdx].id }
-                            ) { revIdx ->
-                                val idx = messages.size - 1 - revIdx
+                                key = { idx -> messages[idx].id }
+                            ) { idx ->
                                 val m = messages[idx]
                                 val isUser = m.role == "user"
 
@@ -778,7 +804,8 @@ fun ChatScreen(
                                                 isDark = isDark,
                                                 fontSizeSp = settings.fontSizeSp,
                                                 onCopyCode = { _, code -> copyPlain(ctx, code, "Код скопирован") },
-                                                onCopyTermux = { lang, code -> TermuxBridge.sendCodeToTermux(ctx, lang, code) }
+                                                onCopyTermux = { lang, code -> TermuxBridge.sendCodeToTermux(ctx, lang, code) },
+                                                onCopyTable = { txt, toast -> copyPlain(ctx, txt, toast) }
                                             )
                                         }
 
@@ -832,6 +859,38 @@ fun ChatScreen(
                                     }
                                 }
                             }
+                            item(key = "bottom_anchor") {
+                                Spacer(Modifier.height(4.dp))
+                            }
+                        }
+
+                        val userAnchors = remember(messages.toList()) {
+                            messages.mapIndexedNotNull { idx, msg ->
+                                if (msg.role == "user") idx to msg else null
+                            }
+                        }
+                        if (userAnchors.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                shadowElevation = 3.dp,
+                                color = MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isDark) Color(0xFF2D3139) else Color(0xFFE5E7EB)
+                                ),
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(end = 8.dp, top = 8.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable { showAnchorsDialog = true }
+                            ) {
+                                Text(
+                                    text = "📑 ${userAnchors.size}",
+                                    fontSize = 11.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                )
+                            }
                         }
                     }
 
@@ -850,7 +909,7 @@ fun ChatScreen(
                                 .size(38.dp)
                                 .clip(CircleShape)
                                 .clickable {
-                                    scope.launch { listState.animateScrollToItem(0) }
+                                    scope.launch { listState.animateScrollToItem(messages.size) }
                                 }
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -1006,6 +1065,60 @@ fun ChatScreen(
                                 Text("↑", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAnchorsDialog) {
+        val anchors = messages.mapIndexedNotNull { idx, msg ->
+            if (msg.role == "user") idx to msg else null
+        }
+        val dividerCol = if (isDark) Color(0xFF2B2F38) else Color(0xFFF0F1F4)
+        Dialog(onDismissRequest = { showAnchorsDialog = false }) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (isDark) Color(0xFF1F2229) else Color.White,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Якоря сообщений (${anchors.size})", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(10.dp))
+                    Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+                        anchors.forEachIndexed { num, (msgIdx, msg) ->
+                            val preview = msg.content.trim().replace("\n", " ").take(90)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showAnchorsDialog = false
+                                        scope.launch { listState.animateScrollToItem(msgIdx) }
+                                    }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Text(
+                                    "#${num + 1}",
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = DeepSeekBlue,
+                                    modifier = Modifier.width(34.dp)
+                                )
+                                Text(
+                                    preview,
+                                    fontSize = 13.5.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            if (num < anchors.lastIndex) HorizontalDivider(color = dividerCol)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { showAnchorsDialog = false }, modifier = Modifier.align(Alignment.End)) {
+                        Text("Закрыть")
                     }
                 }
             }
@@ -1239,6 +1352,56 @@ private fun ModePill(
             color = textCol,
             modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp)
         )
+    }
+}
+
+@Composable
+private fun DeepWhaleLogo(sizeDp: Int, isGemini: Boolean, cornerDp: Int = sizeDp / 2) {
+    Box(
+        modifier = Modifier
+            .size(sizeDp.dp)
+            .clip(RoundedCornerShape(cornerDp.dp))
+            .background(DeepSeekBlue),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isGemini) {
+            Text("✦", color = Color.White, fontSize = (sizeDp * 0.42f).sp, fontWeight = FontWeight.Bold)
+        } else {
+            Canvas(Modifier.size((sizeDp * 0.72f).dp)) {
+                val w = size.width
+                val h = size.height
+                val whale = Path().apply {
+                    moveTo(w * 0.08f, h * 0.54f)
+                    cubicTo(w * 0.08f, h * 0.28f, w * 0.28f, h * 0.16f, w * 0.50f, h * 0.19f)
+                    cubicTo(w * 0.66f, h * 0.21f, w * 0.75f, h * 0.34f, w * 0.79f, h * 0.46f)
+                    lineTo(w * 0.96f, h * 0.30f)
+                    lineTo(w * 0.91f, h * 0.52f)
+                    lineTo(w * 0.96f, h * 0.72f)
+                    lineTo(w * 0.77f, h * 0.62f)
+                    cubicTo(w * 0.70f, h * 0.78f, w * 0.56f, h * 0.84f, w * 0.38f, h * 0.84f)
+                    cubicTo(w * 0.18f, h * 0.84f, w * 0.08f, h * 0.72f, w * 0.08f, h * 0.54f)
+                    close()
+                }
+                drawPath(whale, Color.White)
+                val prompt = Path().apply {
+                    moveTo(w * 0.31f, h * 0.40f)
+                    lineTo(w * 0.44f, h * 0.52f)
+                    lineTo(w * 0.31f, h * 0.64f)
+                }
+                drawPath(
+                    prompt,
+                    DeepSeekBlue,
+                    style = Stroke(width = w * 0.075f, cap = StrokeCap.Round)
+                )
+                drawLine(
+                    color = DeepSeekBlue,
+                    start = Offset(w * 0.49f, h * 0.64f),
+                    end = Offset(w * 0.63f, h * 0.64f),
+                    strokeWidth = w * 0.075f,
+                    cap = StrokeCap.Round
+                )
+            }
+        }
     }
 }
 
