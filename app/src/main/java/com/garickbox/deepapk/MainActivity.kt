@@ -49,8 +49,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val colors = if (isSystemInDarkTheme()) DeepDarkColors else DeepLightColors
-            MaterialTheme(colorScheme = colors) {
+            var themeMode by remember { mutableStateOf(SettingsStore.load(this).themeMode) }
+            val sysDark = isSystemInDarkTheme()
+            val isDark = when (themeMode) {
+                "dark" -> true
+                "light" -> false
+                else -> sysDark
+            }
+            MaterialTheme(colorScheme = if (isDark) DeepDarkColors else DeepLightColors) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -60,8 +66,15 @@ class MainActivity : ComponentActivity() {
                         screen = "chat"
                     }
                     when (screen) {
-                        "chat" -> ChatScreen(onOpenSettings = { screen = "settings" })
-                        "settings" -> SettingsScreen(onBack = { screen = "chat" })
+                        "chat" -> ChatScreen(
+                            isDark = isDark,
+                            onOpenSettings = { screen = "settings" }
+                        )
+                        "settings" -> SettingsScreen(
+                            isDark = isDark,
+                            onThemeChange = { themeMode = it },
+                            onBack = { screen = "chat" }
+                        )
                     }
                 }
             }

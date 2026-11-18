@@ -16,7 +16,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -46,8 +45,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class AttachedFile(
     val name: String,
@@ -82,10 +83,12 @@ private fun readAttachment(ctx: Context, uri: Uri): AttachedFile? {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ChatScreen(onOpenSettings: () -> Unit) {
+fun ChatScreen(
+    isDark: Boolean,
+    onOpenSettings: () -> Unit
+) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val isDark = isSystemInDarkTheme()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val listState = rememberLazyListState()
     val showScrollBottom by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
@@ -93,6 +96,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     var settings by remember { mutableStateOf(SettingsStore.load(ctx)) }
     var input by remember { mutableStateOf("") }
     var drawerSearch by remember { mutableStateOf("") }
+    var balanceText by remember { mutableStateOf("") }
     val attachments = remember { mutableStateListOf<AttachedFile>() }
 
     val sessions = remember {
@@ -133,6 +137,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
 
     var contextMenuMsg by remember { mutableStateOf<Message?>(null) }
     var selectTextMsg by remember { mutableStateOf<Message?>(null) }
+    var codePickerBlocks by remember { mutableStateOf<List<MdBlock.Code>?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -145,7 +150,13 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
         }
     }
 
-    LaunchedEffect(Unit) { settings = SettingsStore.load(ctx) }
+    LaunchedEffect(Unit) {
+        settings = SettingsStore.load(ctx)
+        if (settings.apiKey.isNotBlank()) {
+            val b = withContext(Dispatchers.IO) { DeepSeekApi.fetchBalance(settings.apiKey) }
+            if (b != null) balanceText = b.text
+        }
+    }
 
     fun persistCurrentSession(customTitle: String? = null) {
         val idx = sessions.indexOfFirst { it.id == activeSessionId }
@@ -202,35 +213,43 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
         ChatStore.saveSessions(ctx, sessions.toList())
     }
 
-    fun startStream() {
+    fun startStream(continueTargetIdx: Int? = null) {
         if (streaming) return
         error = ""
         searchInfo = ""
-        messages.add(Message(role = "assistant", content = ""))
-        val newIdx = messages.size - 1
+        val targetIdx = if (continueTargetIdx != null) {
+            continueTargetIdx
+        } else {
+            messages.add(Message(role = "assistant", content = ""))
+            messages.size - 1
+        }
+        val historySlice = if (continueTargetIdx != null) {
+            messages.subList(0, continueTargetIdx + 1).toList()
+        } else {
+            messages.dropLast(1)
+        }
+        if (continueTargetIdx != null) {
+            messages[targetIdx] = messages[targetIdx].copy(truncated = false)
+        }
         streaming = true
         streamJob = scope.launch {
             try {
                 DeepSeekApi.chatStream(
-                    apiKey = settings.apiKey,
-                    model = settings.model,
-                    thinkingEnabled = settings.thinkingEnabled,
-                    webSearchEnabled = settings.webSearchEnabled,
-                    temperature = settings.temperature,
-                    maxTokens = settings.maxTokens,
-                    systemPrompt = settings.systemPrompt,
-                    history = messages.dropLast(1)
+                    settings = settings,
+                    history = historySlice,
+                    continuation = continueTargetIdx != null
                 ).collect { ev ->
-                    val cur = messages.getOrNull(newIdx) ?: return@collect
+                    val cur = messages.getOrNull(targetIdx) ?: return@collect
                     when (ev) {
-                        is StreamEvent.Reasoning -> messages[newIdx] = cur.copy(reasoning = cur.reasoning + ev.delta)
-                        is StreamEvent.Content -> messages[newIdx] = cur.copy(content = cur.content + ev.delta)
+                        is StreamEvent.Reasoning -> messages[targetIdx] = cur.copy(reasoning = cur.reasoning + ev.delta)
+                        is StreamEvent.Content -> messages[targetIdx] = cur.copy(content = cur.content + ev.delta)
                         is StreamEvent.SearchInfo -> searchInfo = "поиск ×${ev.queries}"
                         is StreamEvent.Error -> error = ev.msg
                         is StreamEvent.Done -> {
-                            if (ev.usage.isNotBlank()) {
-                                messages[newIdx] = cur.copy(usage = ev.usage)
-                            }
+                            messages[targetIdx] = cur.copy(
+                                usage = if (ev.usage.isNotBlank()) ev.usage else cur.usage,
+                                truncated = ev.truncated
+                            )
                         }
                     }
                 }
@@ -238,9 +257,9 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
             } catch (e: Exception) {
                 error = e.message ?: "unknown"
             } finally {
-                val last = messages.getOrNull(newIdx)
-                if (last != null && last.content.isBlank() && last.reasoning.isBlank()) {
-                    messages.removeAt(newIdx)
+                val last = messages.getOrNull(targetIdx)
+                if (continueTargetIdx == null && last != null && last.content.isBlank() && last.reasoning.isBlank()) {
+                    messages.removeAt(targetIdx)
                 }
                 persistCurrentSession()
                 streaming = false
@@ -278,7 +297,17 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
         startStream()
     }
 
-    if (settings.apiKey.isBlank()) {
+    fun handleSendMessageToTermux(content: String) {
+        val blocks = TermuxBridge.extractAllCodeBlocks(content)
+        when {
+            blocks.isEmpty() -> Toast.makeText(ctx, "Нет блоков кода", Toast.LENGTH_SHORT).show()
+            blocks.size == 1 -> TermuxBridge.sendCodeToTermux(ctx, blocks[0].lang, blocks[0].code)
+            else -> codePickerBlocks = blocks
+        }
+    }
+
+    if (settings.activeKey().isBlank()) {
+        val isGem = settings.provider == "gemini"
         Column(
             Modifier.fillMaxSize().padding(24.dp),
             verticalArrangement = Arrangement.Center,
@@ -291,13 +320,13 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                     .background(DeepSeekBlue),
                 contentAlignment = Alignment.Center
             ) {
-                Text("DS", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(if (isGem) "G" else "DS", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(14.dp))
-            Text("DeepSeek", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(if (isGem) "Google Gemini" else "DeepSeek", fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
             Text(
-                "Введите API-ключ с platform.deepseek.com",
+                if (isGem) "Введите API-ключ из Google AI Studio" else "Введите API-ключ с platform.deepseek.com",
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -308,13 +337,14 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
-                placeholder = { Text("sk-...") }
+                placeholder = { Text(if (isGem) "AIza..." else "sk-...") }
             )
             Spacer(Modifier.height(12.dp))
             Button(
                 onClick = {
                     if (input.isNotBlank()) {
-                        val s = settings.copy(apiKey = input.trim())
+                        val s = if (isGem) settings.copy(geminiApiKey = input.trim())
+                        else settings.copy(apiKey = input.trim())
                         SettingsStore.save(ctx, s)
                         settings = s
                         input = ""
@@ -323,6 +353,8 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 shape = RoundedCornerShape(14.dp)
             ) { Text("Начать работу") }
+            Spacer(Modifier.height(10.dp))
+            TextButton(onClick = onOpenSettings) { Text("Открыть настройки") }
         }
         return
     }
@@ -346,7 +378,6 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 drawerContainerColor = MaterialTheme.colorScheme.background
             ) {
                 Column(Modifier.fillMaxHeight().padding(horizontal = 14.dp, vertical = 12.dp)) {
-                    // Search bar like DeepSeek drawer
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -454,13 +485,19 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                                 .background(DeepSeekBlue),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("DS", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (settings.provider == "gemini") "G" else "DS",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("DeepApk", fontSize = 14.5.sp, fontWeight = FontWeight.Medium)
+                            Text("DeepApk · ${BuildConfig.VERSION_NAME}", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                             Text(
-                                "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                                if (balanceText.isNotBlank()) "Баланс: $balanceText"
+                                else settings.activeModelLabel(),
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -477,7 +514,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 .background(MaterialTheme.colorScheme.background)
         ) {
             Column(Modifier.fillMaxSize()) {
-                // Top bar matching DeepSeek screenshot
+                // Top bar
                 val barIconColor = MaterialTheme.colorScheme.onBackground
                 Row(
                     modifier = Modifier
@@ -511,7 +548,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                         }
                     }
 
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(6.dp))
                     Text(
                         text = activeTitle,
                         fontSize = 16.sp,
@@ -521,12 +558,28 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                         modifier = Modifier.weight(1f)
                     )
 
-                    if (searchInfo.isNotBlank()) {
+                    // Quick 1-tap provider switch (DeepSeek / Gemini)
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable {
+                                if (!streaming) {
+                                    val next = if (settings.provider == "gemini") "deepseek" else "gemini"
+                                    val updated = settings.copy(provider = next)
+                                    settings = updated
+                                    SettingsStore.save(ctx, updated)
+                                }
+                            }
+                    ) {
                         Text(
-                            text = "🌐 $searchInfo",
-                            fontSize = 11.sp,
+                            text = if (settings.provider == "gemini") "✦ Gemini" else "DS",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold,
                             color = DeepSeekBlue,
-                            modifier = Modifier.padding(end = 8.dp)
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
                         )
                     }
 
@@ -567,7 +620,6 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                     }
                 }
 
-                // Messages or Welcome Screen
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     if (messages.isEmpty()) {
                         Column(
@@ -584,18 +636,23 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                                     .background(DeepSeekBlue),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("DS", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (settings.provider == "gemini") "✦" else "DS",
+                                    color = Color.White,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                             Spacer(Modifier.height(14.dp))
                             Text(
-                                "Привет! Я DeepSeek",
+                                if (settings.provider == "gemini") "Привет! Я Gemini" else "Привет! Я DeepSeek",
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                "Чем я могу помочь сегодня?",
-                                fontSize = 14.sp,
+                                "${settings.activeModelLabel()} · Чем помочь сегодня?",
+                                fontSize = 13.5.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -635,8 +692,8 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                                         ) {
                                             Text(
                                                 text = m.content,
-                                                fontSize = 15.sp,
-                                                lineHeight = 21.sp,
+                                                fontSize = settings.fontSizeSp.sp,
+                                                lineHeight = (settings.fontSizeSp + 6).sp,
                                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
                                             )
@@ -719,6 +776,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                                                 content = m.content,
                                                 textColor = textColor,
                                                 isDark = isDark,
+                                                fontSizeSp = settings.fontSizeSp,
                                                 onCopyCode = { _, code -> copyPlain(ctx, code, "Код скопирован") },
                                                 onCopyTermux = { lang, code -> TermuxBridge.sendCodeToTermux(ctx, lang, code) }
                                             )
@@ -748,6 +806,16 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                                                                 messages.removeAt(idx)
                                                                 startStream()
                                                             }
+                                                            .padding(vertical = 2.dp)
+                                                    )
+                                                    Text(
+                                                        if (m.truncated) "⏭ Продолжить (обрыв)" else "⏭ Продолжить",
+                                                        fontSize = 12.sp,
+                                                        fontWeight = if (m.truncated) FontWeight.SemiBold else FontWeight.Normal,
+                                                        color = if (m.truncated) DeepSeekBlue
+                                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier
+                                                            .clickable { startStream(continueTargetIdx = idx) }
                                                             .padding(vertical = 2.dp)
                                                     )
                                                 }
@@ -792,7 +860,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                     }
                 }
 
-                // Bottom floating composer card matching screenshot 1
+                // Bottom floating composer card
                 val cardBg = if (isDark) Color(0xFF1A1C22) else Color(0xFFFFFFFF)
                 val cardBorder = if (isDark) Color(0xFF2D3139) else Color(0xFFE6E8EE)
 
@@ -893,7 +961,6 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                         )
                         Spacer(Modifier.weight(1f))
 
-                        // "+" attach file button matching screenshot 1
                         Box(
                             modifier = Modifier
                                 .size(32.dp)
@@ -945,7 +1012,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
         }
     }
 
-    // Long-press Context Menu Dialog matching screenshot 1
+    // Long-press Context Menu Dialog
     contextMenuMsg?.let { m ->
         val hasCode = TermuxBridge.hasCodeBlocks(m.content)
         val dividerCol = if (isDark) Color(0xFF2B2F38) else Color(0xFFF0F1F4)
@@ -987,16 +1054,83 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                             }
                         }
                     }
-                    if (hasCode) {
+                    if (m.role == "assistant") {
                         HorizontalDivider(color = dividerCol)
-                        ContextMenuItem("▶", "Передать в Termux", accent = DeepSeekBlue) {
-                            val block = TermuxBridge.extractBestCodeBlock(m.content)
+                        ContextMenuItem("⏭", "Продолжить") {
+                            val target = m
                             contextMenuMsg = null
-                            if (block != null) {
-                                TermuxBridge.sendCodeToTermux(ctx, block.lang, block.code)
+                            val pos = messages.indexOfFirst { it.id == target.id }
+                            if (pos >= 0 && !streaming) {
+                                startStream(continueTargetIdx = pos)
                             }
                         }
                     }
+                    if (hasCode) {
+                        HorizontalDivider(color = dividerCol)
+                        ContextMenuItem("▶", "Передать в Termux", accent = DeepSeekBlue) {
+                            val content = m.content
+                            contextMenuMsg = null
+                            handleSendMessageToTermux(content)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Specific Code Block Picker Dialog (when message has 2+ blocks)
+    codePickerBlocks?.let { blocks ->
+        val dividerCol = if (isDark) Color(0xFF2B2F38) else Color(0xFFF0F1F4)
+        Dialog(onDismissRequest = { codePickerBlocks = null }) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (isDark) Color(0xFF1F2229) else Color.White,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "Выберите блок для Termux",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                        blocks.forEachIndexed { idx, b ->
+                            val firstLine = b.code.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        codePickerBlocks = null
+                                        TermuxBridge.sendCodeToTermux(ctx, b.lang, b.code)
+                                    }
+                                    .padding(vertical = 10.dp)
+                            ) {
+                                Text(
+                                    "Блок #${idx + 1} · ${b.lang.ifBlank { "code" }} (${b.code.lines().size} стр.)",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = DeepSeekBlue
+                                )
+                                if (firstLine.isNotBlank()) {
+                                    Text(
+                                        firstLine,
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (idx < blocks.lastIndex) HorizontalDivider(color = dividerCol)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(
+                        onClick = { codePickerBlocks = null },
+                        modifier = Modifier.align(Alignment.End)
+                    ) { Text("Отмена") }
                 }
             }
         }

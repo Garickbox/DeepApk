@@ -16,6 +16,7 @@ data class Message(
     val content: String,
     val reasoning: String = "",
     val usage: String = "",
+    val truncated: Boolean = false,
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -78,6 +79,7 @@ object ChatStore {
                             content = o.optString("content"),
                             reasoning = o.optString("reasoning", ""),
                             usage = o.optString("usage", ""),
+                            truncated = o.optBoolean("truncated", false),
                             timestamp = o.optLong("timestamp", 0L)
                         )
                     )
@@ -113,6 +115,7 @@ object ChatStore {
                         .put("content", m.content)
                         .put("reasoning", m.reasoning)
                         .put("usage", m.usage)
+                        .put("truncated", m.truncated)
                         .put("timestamp", m.timestamp)
                 )
             }

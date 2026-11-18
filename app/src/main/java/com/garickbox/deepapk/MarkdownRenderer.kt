@@ -470,6 +470,7 @@ fun MarkdownMessageContent(
     content: String,
     textColor: Color,
     isDark: Boolean,
+    fontSizeSp: Int = 15,
     onCopyCode: (lang: String, code: String) -> Unit,
     onCopyTermux: (lang: String, code: String) -> Unit
 ) {
@@ -494,12 +495,13 @@ fun MarkdownMessageContent(
                 }
 
                 is MdBlock.Heading -> {
-                    val size = when (block.level) {
-                        1 -> 19.sp
-                        2 -> 17.sp
-                        3 -> 16.sp
-                        else -> 15.sp
+                    val delta = when (block.level) {
+                        1 -> 4
+                        2 -> 3
+                        3 -> 2
+                        else -> 1
                     }
+                    val size = (fontSizeSp + delta).sp
                     val styled = remember(block.text, isDark) {
                         buildCleanInlineString(block.text, linkColor, inlineCodeBg)
                     }
@@ -531,9 +533,9 @@ fun MarkdownMessageContent(
                     ) {
                         Text(
                             text = styled,
-                            fontSize = 14.sp,
+                            fontSize = (fontSizeSp - 1).sp,
                             color = textColor.copy(alpha = 0.8f),
-                            lineHeight = 20.sp
+                            lineHeight = (fontSizeSp + 5).sp
                         )
                     }
                 }
@@ -548,16 +550,16 @@ fun MarkdownMessageContent(
                     ) {
                         Text(
                             text = block.marker,
-                            fontSize = 14.5.sp,
+                            fontSize = fontSizeSp.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = textColor.copy(alpha = 0.8f),
                             modifier = Modifier.padding(start = 4.dp, end = 8.dp)
                         )
                         Text(
                             text = styled,
-                            fontSize = 15.sp,
+                            fontSize = fontSizeSp.sp,
                             color = textColor,
-                            lineHeight = 22.sp,
+                            lineHeight = (fontSizeSp + 7).sp,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -569,9 +571,9 @@ fun MarkdownMessageContent(
                     }
                     Text(
                         text = styled,
-                        fontSize = 15.sp,
+                        fontSize = fontSizeSp.sp,
                         color = textColor,
-                        lineHeight = 22.sp
+                        lineHeight = (fontSizeSp + 7).sp
                     )
                 }
 
@@ -619,8 +621,8 @@ fun MarkdownMessageContent(
                         HorizontalDivider(color = codeHeaderDivider, thickness = 1.dp)
                         Text(
                             text = highlighted,
-                            fontSize = 12.5.sp,
-                            lineHeight = 18.5.sp,
+                            fontSize = (fontSizeSp - 2.5f).coerceAtLeast(11f).sp,
+                            lineHeight = (fontSizeSp + 3.5f).sp,
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier
                                 .fillMaxWidth()

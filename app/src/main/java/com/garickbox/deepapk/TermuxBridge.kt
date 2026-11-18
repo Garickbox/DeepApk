@@ -3,10 +3,12 @@ package com.garickbox.deepapk
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -20,13 +22,8 @@ object TermuxBridge {
     fun hasCodeBlocks(text: String): Boolean =
         parseMarkdownBlocks(text).any { it is MdBlock.Code }
 
-    fun extractBestCodeBlock(text: String): MdBlock.Code? {
-        val codes = parseMarkdownBlocks(text).filterIsInstance<MdBlock.Code>()
-        if (codes.isEmpty()) return null
-        return codes.lastOrNull {
-            it.lang.lowercase() in listOf("sh", "bash", "zsh", "shell", "")
-        } ?: codes.last()
-    }
+    fun extractAllCodeBlocks(text: String): List<MdBlock.Code> =
+        parseMarkdownBlocks(text).filterIsInstance<MdBlock.Code>()
 
     fun hasRunPermission(ctx: Context): Boolean =
         ContextCompat.checkSelfPermission(ctx, PERM_RUN_COMMAND) == PackageManager.PERMISSION_GRANTED
@@ -42,7 +39,12 @@ object TermuxBridge {
             else -> "deep_code.${cleanLang.take(8).ifBlank { "txt" }}"
         }
 
-        val savedPath = writeToDownloads(ctx, desiredName, code)
+        val savedPath = writeBytesToDownloads(
+            ctx,
+            desiredName,
+            "text/plain",
+            code.toByteArray(Charsets.UTF_8)
+        )
         if (savedPath == null) {
             copyToClipboard(ctx, code)
             Toast.makeText(ctx, "Не удалось записать файл — код скопирован", Toast.LENGTH_SHORT).show()
@@ -104,12 +106,17 @@ object TermuxBridge {
         }
     }
 
-    private fun writeToDownloads(ctx: Context, fileName: String, content: String): String? {
+    fun writeBytesToDownloads(
+        ctx: Context,
+        fileName: String,
+        mimeType: String,
+        bytes: ByteArray
+    ): String? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
                 val resolver = ctx.contentResolver
                 val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                var existingUri: android.net.Uri? = null
+                var existingUri: Uri? = null
                 resolver.query(
                     collection,
                     arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME),
@@ -118,28 +125,23 @@ object TermuxBridge {
                     null
                 )?.use { cur ->
                     if (cur.moveToFirst()) {
-                        val id = cur.getLong(0)
-                        existingUri = android.content.ContentUris.withAppendedId(collection, id)
+                        existingUri = ContentUris.withAppendedId(collection, cur.getLong(0))
                     }
                 }
 
                 val targetUri = existingUri?.let { uri ->
                     runCatching {
-                        resolver.openOutputStream(uri, "wt")?.use { os ->
-                            os.write(content.toByteArray(Charsets.UTF_8))
-                        }
+                        resolver.openOutputStream(uri, "wt")?.use { os -> os.write(bytes) }
                         uri
                     }.getOrNull()
                 } ?: run {
                     val values = ContentValues().apply {
                         put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                        put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                        put(MediaStore.Downloads.MIME_TYPE, mimeType)
                         put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                     }
                     val newUri = resolver.insert(collection, values) ?: return null
-                    resolver.openOutputStream(newUri, "wt")?.use { os ->
-                        os.write(content.toByteArray(Charsets.UTF_8))
-                    }
+                    resolver.openOutputStream(newUri, "wt")?.use { os -> os.write(bytes) }
                     newUri
                 }
 
@@ -165,7 +167,7 @@ object TermuxBridge {
                 val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 if (!dir.exists()) dir.mkdirs()
                 val f = File(dir, fileName)
-                f.writeText(content, Charsets.UTF_8)
+                f.writeBytes(bytes)
                 f.absolutePath
             } catch (_: Exception) {
                 null
@@ -173,8 +175,8 @@ object TermuxBridge {
         }
     }
 
-    private fun copyToClipboard(ctx: Context, text: String) {
+    fun copyToClipboard(ctx: Context, text: String) {
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("termux", text))
+        cm.setPrimaryClip(ClipData.newPlainText("deepapk", text))
     }
 }
