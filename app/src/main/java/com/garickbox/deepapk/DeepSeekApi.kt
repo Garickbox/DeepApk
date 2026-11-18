@@ -45,6 +45,7 @@ object DeepSeekApi {
             .put("stream", true)
             .put("temperature", temperature.toDouble())
             .put("max_tokens", maxTokens)
+            .put("stream_options", JSONObject().put("include_usage", true))
 
         if (thinkingEnabled) root.put("thinking", JSONObject().put("type", "enabled"))
         else root.put("thinking", JSONObject().put("type", "disabled"))
@@ -69,36 +70,41 @@ object DeepSeekApi {
             if (!resp.isSuccessful) {
                 val err = resp.body?.string()?.take(800) ?: ""
                 trySend(StreamEvent.Error("API ${resp.code}: $err"))
-                close(); return@callbackFlow
-            }
-            val reader = BufferedReader(InputStreamReader(resp.body!!.byteStream()))
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                val l = line!!.trim()
-                if (!l.startsWith("data: ")) continue
-                val json = l.removePrefix("data: ").trim()
-                if (json == "[DONE]") { trySend(StreamEvent.Done()); break }
+                close()
+            } else {
                 try {
-                    val obj = JSONObject(json)
-                    // usage на финальном delta
-                    val usage = obj.optJSONObject("usage")
-                    if (usage != null) {
-                        val st = usage.optJSONObject("server_tool_use")
-                        val searches = st?.optInt("tool_search", 0) ?: 0
-                        if (searches > 0) trySend(StreamEvent.SearchInfo(searches))
+                    val reader = BufferedReader(InputStreamReader(resp.body!!.byteStream()))
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        val l = line!!.trim()
+                        if (!l.startsWith("data: ")) continue
+                        val json = l.removePrefix("data: ").trim()
+                        if (json == "[DONE]") { trySend(StreamEvent.Done()); break }
+                        try {
+                            val obj = JSONObject(json)
+                            val usage = obj.optJSONObject("usage")
+                            if (usage != null) {
+                                val st = usage.optJSONObject("server_tool_use")
+                                val searches = st?.optInt("tool_search", 0) ?: 0
+                                if (searches > 0) trySend(StreamEvent.SearchInfo(searches))
+                            }
+                            val choice = obj.optJSONArray("choices")?.optJSONObject(0) ?: continue
+                            val delta = choice.optJSONObject("delta") ?: continue
+                            val reasoning = delta.optString("reasoning_content", "")
+                            if (reasoning.isNotEmpty() && reasoning != "null") trySend(StreamEvent.Reasoning(reasoning))
+                            val content = delta.optString("content", "")
+                            if (content.isNotEmpty() && content != "null") trySend(StreamEvent.Content(content))
+                        } catch (_: Exception) {}
                     }
-                    val choice = obj.optJSONArray("choices")?.optJSONObject(0) ?: continue
-                    val delta = choice.optJSONObject("delta") ?: continue
-                    val reasoning = delta.optString("reasoning_content", "")
-                    if (reasoning.isNotEmpty() && reasoning != "null") trySend(StreamEvent.Reasoning(reasoning))
-                    val content = delta.optString("content", "")
-                    if (content.isNotEmpty() && content != "null") trySend(StreamEvent.Content(content))
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    trySend(StreamEvent.Error(e.message ?: "unknown"))
+                }
+                close()
             }
         } catch (e: Exception) {
             trySend(StreamEvent.Error(e.message ?: "unknown"))
+            close()
         }
-        close()
         awaitClose { call.cancel() }
     }
 }

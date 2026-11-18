@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,7 +29,9 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     val scope = rememberCoroutineScope()
     var settings by remember { mutableStateOf(SettingsStore.load(ctx)) }
     var input by remember { mutableStateOf("") }
-    var messages by remember { mutableStateOf(ChatStore.load(ctx)) }
+    val messages = remember {
+        mutableStateListOf<Message>().apply { addAll(ChatStore.load(ctx)) }
+    }
     var streaming by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var searchInfo by remember { mutableStateOf("") }
@@ -68,6 +71,12 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 )
             }
             if (searchInfo.isNotBlank()) Text("🌐 $searchInfo", fontSize = 10.sp, color = Color(0xFF0066CC))
+            Text("🗑", fontSize = 20.sp, modifier = Modifier.clickable {
+                if (!streaming) {
+                    messages.clear()
+                    ChatStore.clear(ctx)
+                }
+            }.padding(4.dp))
             Text("⚙", fontSize = 22.sp, modifier = Modifier.clickable { onOpenSettings() }.padding(4.dp))
         }
         if (error.isNotBlank()) {
@@ -93,8 +102,17 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                         }
                     }
                     Text(m.content, fontSize = 14.sp)
-                    if (m.role == "assistant" && m.content.contains("```")) {
-                        TextButton(onClick = { copyForTermux(ctx, m.content) }) { Text("📋 Копировать для Termux", fontSize = 11.sp) }
+                    if (m.role == "assistant" && m.content.isNotBlank()) {
+                        Row {
+                            if (m.content.contains("```")) {
+                                TextButton(onClick = { copyForTermux(ctx, m.content) }) {
+                                    Text("📋 Для Termux", fontSize = 11.sp)
+                                }
+                            }
+                            TextButton(onClick = { copyPlain(ctx, m.content) }) {
+                                Text("📋 Копировать", fontSize = 11.sp)
+                            }
+                        }
                     }
                     HorizontalDivider()
                 }
@@ -150,10 +168,17 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     }
 }
 
+private fun copyPlain(ctx: Context, text: String) {
+    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText("deepapk", text))
+    Toast.makeText(ctx, "Скопировано", Toast.LENGTH_SHORT).show()
+}
+
 private fun copyForTermux(ctx: Context, text: String) {
+    val marker = "DEEPAPK_EOF"
     val escaped = text.replace(Regex("```(\\w*)\\n([\\s\\S]*?)```")) { m ->
         val ext = m.groupValues[1].ifBlank { "txt" }
-        "cat > file.$ext << 'EOF'\n${m.groupValues[2]}EOF\n"
+        "cat > file.$ext << '" + marker + "'\n" + m.groupValues[2] + marker + "\n"
     }
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("termux", escaped))

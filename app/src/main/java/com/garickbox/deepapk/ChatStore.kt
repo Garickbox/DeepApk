@@ -9,8 +9,10 @@ data class Message(val role: String, val content: String, val reasoning: String 
 
 object ChatStore {
     private fun file(ctx: Context) = File(ctx.filesDir, "chats.json")
+
     fun load(ctx: Context): MutableList<Message> {
-        val f = file(ctx); if (!f.exists()) return mutableListOf()
+        val f = file(ctx)
+        if (!f.exists()) return mutableListOf()
         return try {
             val arr = JSONArray(f.readText())
             (0 until arr.length()).map {
@@ -19,9 +21,16 @@ object ChatStore {
             }.toMutableList()
         } catch (_: Exception) { mutableListOf() }
     }
+
     fun save(ctx: Context, msgs: List<Message>) {
         val arr = JSONArray()
-        msgs.forEach { arr.put(JSONObject().put("role", it.role).put("content", it.content).put("reasoning", it.reasoning)) }
+        msgs.forEach {
+            arr.put(JSONObject().put("role", it.role).put("content", it.content).put("reasoning", it.reasoning))
+        }
         file(ctx).writeText(arr.toString())
+    }
+
+    fun clear(ctx: Context) {
+        file(ctx).writeText("[]")
     }
 }
