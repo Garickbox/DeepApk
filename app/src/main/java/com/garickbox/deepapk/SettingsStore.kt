@@ -28,7 +28,7 @@ object SettingsStore {
             .putString("api_key", s.apiKey)
             .putString("model", s.model)
             .putBoolean("thinking_enabled", s.thinkingEnabled)
-            .putBoolean("web_search_enabled", s.webSearchEnabled)
+            .putBoolean("webSearchEnabled", s.webSearchEnabled)
             .putFloat("temperature", s.temperature)
             .putInt("max_tokens", s.maxTokens)
             .putString("system_prompt", s.systemPrompt)
