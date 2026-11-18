@@ -4,21 +4,28 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -28,39 +35,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
-private sealed class MsgSegment {
-    data class Text(val text: String) : MsgSegment()
-    data class Code(val lang: String, val code: String) : MsgSegment()
-}
-
-private fun parseSegments(input: String): List<MsgSegment> {
-    val result = mutableListOf<MsgSegment>()
-    val regex = Regex("```([^\\n`]*)\\r?\\n([\\s\\S]*?)```")
-    var last = 0
-    for (m in regex.findAll(input)) {
-        if (m.range.first > last) {
-            val plain = input.substring(last, m.range.first).trim('\n')
-            if (plain.isNotEmpty()) result.add(MsgSegment.Text(plain))
-        }
-        val lang = m.groupValues[1].trim()
-        val code = m.groupValues[2].trimEnd('\r', '\n')
-        result.add(MsgSegment.Code(lang, code))
-        last = m.range.last + 1
-    }
-    if (last < input.length) {
-        val tail = input.substring(last).trimStart('\n')
-        if (tail.isNotEmpty()) result.add(MsgSegment.Text(tail))
-    }
-    if (result.isEmpty() && input.isNotEmpty()) {
-        result.add(MsgSegment.Text(input))
-    }
-    return result
-}
-
 @Composable
 fun ChatScreen(onOpenSettings: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    val isDark = isSystemInDarkTheme()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+
     var settings by remember { mutableStateOf(SettingsStore.load(ctx)) }
     var input by remember { mutableStateOf("") }
     val sessions = remember {
@@ -98,7 +79,6 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     var error by remember { mutableStateOf("") }
     var searchInfo by remember { mutableStateOf("") }
     var reasoningExpanded by remember { mutableStateOf<Set<Long>>(emptySet()) }
-    var showSessionsDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { settings = SettingsStore.load(ctx) }
 
@@ -204,23 +184,51 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
         }
     }
 
+    fun sendUserText(rawText: String) {
+        val userText = rawText.trim()
+        if (userText.isEmpty() || streaming) return
+        input = ""
+        val curTitle = sessions.firstOrNull { it.id == activeSessionId }?.title
+        if (messages.isEmpty() || curTitle == "Новый чат") {
+            persistCurrentSession(userText.replace("\n", " ").take(36))
+        }
+        messages.add(Message(role = "user", content = userText))
+        startStream()
+    }
+
     if (settings.apiKey.isBlank()) {
         Column(
-            Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.Center
+            Modifier.fillMaxSize().padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("DeepApk v${BuildConfig.VERSION_NAME}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(DeepSeekBlue),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("DS", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(14.dp))
+            Text("DeepSeek", fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
-            Text("Введите DeepSeek API Key (platform.deepseek.com):", fontSize = 14.sp)
-            Spacer(Modifier.height(8.dp))
+            Text(
+                "Введите API-ключ с platform.deepseek.com",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(16.dp))
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
                 placeholder = { Text("sk-...") }
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Button(
                 onClick = {
                     if (input.isNotBlank()) {
@@ -230,34 +238,165 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                         input = ""
                     }
                 },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Сохранить") }
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("Начать работу") }
         }
         return
     }
 
-    val activeTitle = sessions.firstOrNull { it.id == activeSessionId }?.title ?: "DeepApk"
+    val activeTitle = sessions.firstOrNull { it.id == activeSessionId }?.title ?: "Новый чат"
 
-    Column(Modifier.fillMaxSize()) {
-        Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = !streaming,
+        drawerContent = {
+            ModalDrawerSheet(
+                modifier = Modifier.width(290.dp),
+                drawerContainerColor = MaterialTheme.colorScheme.surface
+            ) {
+                Column(Modifier.fillMaxHeight().padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(DeepSeekBlue),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("DS", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("DeepApk", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                "v${BuildConfig.VERSION_NAME} · build ${BuildConfig.VERSION_CODE}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+                    Button(
+                        onClick = {
+                            createNewSession()
+                            scope.launch { drawerState.close() }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("✎  Новый чат") }
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "История чатов",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                    )
+
+                    LazyColumn(Modifier.weight(1f)) {
+                        items(sessions.size, key = { sessions[it].id }) { i ->
+                            val s = sessions[i]
+                            val selected = s.id == activeSessionId
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (selected) MaterialTheme.colorScheme.primaryContainer
+                                        else Color.Transparent
+                                    )
+                                    .clickable {
+                                        switchSession(s)
+                                        scope.launch { drawerState.close() }
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        s.title,
+                                        fontSize = 13.5.sp,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "${s.messages.size} сообщ.",
+                                        fontSize = 10.5.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    "🗑",
+                                    fontSize = 15.sp,
+                                    modifier = Modifier
+                                        .clickable { deleteSession(s.id) }
+                                        .padding(6.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                scope.launch { drawerState.close() }
+                                onOpenSettings()
+                            }
+                            .padding(horizontal = 10.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("⚙", fontSize = 18.sp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Настройки и обновления", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+        ) {
+            // Top bar (DeepSeek style)
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(Modifier.weight(1f).clickable { if (!streaming) showSessionsDialog = true }) {
+                Text(
+                    "☰",
+                    fontSize = 21.sp,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { if (!streaming) scope.launch { drawerState.open() } }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     Text(
-                        activeTitle,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
+                        text = activeTitle,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     val shownModel = if (settings.webSearchEnabled) "deepseek-flash" else settings.model
                     Text(
-                        "b${BuildConfig.VERSION_CODE} · $shownModel" +
-                            (if (settings.thinkingEnabled) " · 🧠" else "") +
-                            (if (settings.webSearchEnabled) " · 🌐" else "") +
-                            (if (searchInfo.isNotBlank()) " ($searchInfo)" else ""),
+                        text = shownModel + (if (searchInfo.isNotBlank()) " · 🌐 $searchInfo" else ""),
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -265,349 +404,373 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                     )
                 }
                 Text(
-                    "💬",
-                    fontSize = 19.sp,
-                    modifier = Modifier.clickable { if (!streaming) showSessionsDialog = true }.padding(6.dp)
-                )
-                Text(
-                    "➕",
-                    fontSize = 18.sp,
-                    modifier = Modifier.clickable { createNewSession() }.padding(6.dp)
-                )
-                Text(
-                    "🗑",
-                    fontSize = 19.sp,
-                    modifier = Modifier.clickable {
-                        if (!streaming) {
-                            messages.clear()
-                            reasoningExpanded = emptySet()
-                            error = ""
-                            searchInfo = ""
-                            persistCurrentSession("Новый чат")
-                        }
-                    }.padding(6.dp)
-                )
-                Text(
-                    "⚙",
+                    "✎",
                     fontSize = 20.sp,
-                    modifier = Modifier.clickable { onOpenSettings() }.padding(6.dp)
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { createNewSession() }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
-        }
 
-        if (error.isNotBlank()) {
-            Surface(
-                color = MaterialTheme.colorScheme.errorContainer,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "❌ $error",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        "✕",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.clickable { error = "" }.padding(4.dp)
-                    )
-                }
-            }
-        }
-
-        LazyColumn(
-            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-            reverseLayout = true,
-            contentPadding = PaddingValues(vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(
-                count = messages.size,
-                key = { revIdx -> messages[messages.size - 1 - revIdx].id }
-            ) { revIdx ->
-                val idx = messages.size - 1 - revIdx
-                val m = messages[idx]
-                val isUser = m.role == "user"
-                val cardColor = if (isUser) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                }
-                val textColor = if (isUser) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-
+            if (error.isNotBlank()) {
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = cardColor,
+                    color = MaterialTheme.colorScheme.errorContainer,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(Modifier.padding(10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                if (isUser) "Вы" else "DeepSeek",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = textColor.copy(alpha = 0.75f),
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (m.usage.isNotBlank()) {
-                                Text(
-                                    m.usage,
-                                    fontSize = 10.sp,
-                                    color = textColor.copy(alpha = 0.65f)
-                                )
-                            }
-                        }
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "❌ $error",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            "✕",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.clickable { error = "" }.padding(4.dp)
+                        )
+                    }
+                }
+            }
 
-                        if (m.reasoning.isNotBlank()) {
-                            val expanded = m.id in reasoningExpanded
-                            Text(
-                                (if (expanded) "▼" else "▶") + " 💭 Рассуждения (${m.reasoning.length} симв.)",
-                                fontSize = 11.sp,
-                                color = textColor.copy(alpha = 0.8f),
-                                modifier = Modifier
-                                    .clickable {
-                                        reasoningExpanded = if (expanded) {
-                                            reasoningExpanded - m.id
-                                        } else {
-                                            reasoningExpanded + m.id
-                                        }
+            // Messages area or DeepSeek Welcome Screen
+            if (messages.isEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(DeepSeekBlue),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("DS", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        "Привет! Я DeepSeek",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Чем я могу помочь сегодня?",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    reverseLayout = true,
+                    contentPadding = PaddingValues(vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    items(
+                        count = messages.size,
+                        key = { revIdx -> messages[messages.size - 1 - revIdx].id }
+                    ) { revIdx ->
+                        val idx = messages.size - 1 - revIdx
+                        val m = messages[idx]
+                        val isUser = m.role == "user"
+
+                        if (isUser) {
+                            // User bubble aligned right (DeepSeek style)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(18.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    modifier = Modifier.widthIn(max = 310.dp)
+                                ) {
+                                    SelectionContainer {
+                                        Text(
+                                            text = m.content,
+                                            fontSize = 15.sp,
+                                            lineHeight = 21.sp,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                                        )
                                     }
-                                    .padding(vertical = 4.dp)
-                            )
-                            if (expanded) {
-                                SelectionContainer {
-                                    Text(
-                                        m.reasoning,
-                                        fontSize = 11.sp,
-                                        color = textColor.copy(alpha = 0.8f),
-                                        fontFamily = FontFamily.Monospace,
-                                        modifier = Modifier.padding(bottom = 6.dp)
-                                    )
                                 }
                             }
-                        }
-
-                        val segments = remember(m.content) { parseSegments(m.content) }
-                        if (segments.isEmpty() && streaming && idx == messages.size - 1) {
-                            Text("Думаю…", fontSize = 13.sp, color = textColor.copy(alpha = 0.6f))
                         } else {
-                            segments.forEach { seg ->
-                                when (seg) {
-                                    is MsgSegment.Text -> {
-                                        SelectionContainer {
+                            // Assistant clean stream on left (DeepSeek style)
+                            val textColor = MaterialTheme.colorScheme.onBackground
+                            val thoughtBarColor = if (isDark) Color(0xFF3E4554) else Color(0xFFD0D5DD)
+                            val thoughtBg = if (isDark) Color(0xFF181A1F) else Color(0xFFF6F7F9)
+
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                if (m.reasoning.isNotBlank()) {
+                                    val expanded = m.id in reasoningExpanded
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(thoughtBg)
+                                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = (if (expanded) "▼ " else "▶ ") +
+                                                "Глубокое мышление (${m.reasoning.length} симв.)",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    reasoningExpanded = if (expanded) {
+                                                        reasoningExpanded - m.id
+                                                    } else {
+                                                        reasoningExpanded + m.id
+                                                    }
+                                                }
+                                        )
+                                        if (expanded) {
+                                            Spacer(Modifier.height(6.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .drawBehind {
+                                                        drawLine(
+                                                            color = thoughtBarColor,
+                                                            start = Offset(0f, 0f),
+                                                            end = Offset(0f, size.height),
+                                                            strokeWidth = 2.dp.toPx()
+                                                        )
+                                                    }
+                                                    .padding(start = 10.dp)
+                                            ) {
+                                                SelectionContainer {
+                                                    Text(
+                                                        text = m.reasoning,
+                                                        fontSize = 12.sp,
+                                                        lineHeight = 17.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        fontFamily = FontFamily.Monospace
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                }
+
+                                if (m.content.isBlank() && streaming && idx == messages.size - 1) {
+                                    Text(
+                                        "Печатаю…",
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else {
+                                    MarkdownMessageContent(
+                                        content = m.content,
+                                        textColor = textColor,
+                                        isDark = isDark,
+                                        onCopyCode = { _, code -> copyPlain(ctx, code, "Код скопирован") },
+                                        onCopyTermux = { lang, code -> copyBlockForTermux(ctx, lang, code) }
+                                    )
+                                }
+
+                                if (m.content.isNotBlank() && !(streaming && idx == messages.size - 1)) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Text(
+                                            "📋 Копировать",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier
+                                                .clickable { copyPlain(ctx, m.content, "Ответ скопирован") }
+                                                .padding(vertical = 4.dp)
+                                        )
+                                        if (idx == messages.size - 1 && !streaming) {
                                             Text(
-                                                seg.text,
-                                                fontSize = 14.sp,
-                                                color = textColor,
-                                                modifier = Modifier.padding(vertical = 2.dp)
+                                                "🔄 Повторить",
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier
+                                                    .clickable {
+                                                        messages.removeAt(idx)
+                                                        startStream()
+                                                    }
+                                                    .padding(vertical = 4.dp)
+                                            )
+                                        }
+                                        Spacer(Modifier.weight(1f))
+                                        if (m.usage.isNotBlank()) {
+                                            Text(
+                                                m.usage,
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                             )
                                         }
                                     }
-                                    is MsgSegment.Code -> {
-                                        Spacer(Modifier.height(4.dp))
-                                        Column(
-                                            Modifier
-                                                .fillMaxWidth()
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(Color(0xFF1A1B1E))
-                                        ) {
-                                            Row(
-                                                Modifier
-                                                    .fillMaxWidth()
-                                                    .background(Color(0xFF282A2F))
-                                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(
-                                                    seg.lang.ifBlank { "code" },
-                                                    fontSize = 11.sp,
-                                                    color = Color(0xFFAAAAAA),
-                                                    fontFamily = FontFamily.Monospace,
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                                Text(
-                                                    "📋 Код",
-                                                    fontSize = 11.sp,
-                                                    color = Color(0xFF8AB4F8),
-                                                    modifier = Modifier
-                                                        .clickable { copyPlain(ctx, seg.code) }
-                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                                )
-                                                Text(
-                                                    "▶ Termux",
-                                                    fontSize = 11.sp,
-                                                    color = Color(0xFF81C995),
-                                                    modifier = Modifier
-                                                        .clickable { copyBlockForTermux(ctx, seg.lang, seg.code) }
-                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                                )
-                                            }
-                                            SelectionContainer {
-                                                Text(
-                                                    seg.code,
-                                                    fontSize = 12.sp,
-                                                    color = Color(0xFFE8EAED),
-                                                    fontFamily = FontFamily.Monospace,
-                                                    modifier = Modifier
-                                                        .horizontalScroll(rememberScrollState())
-                                                        .padding(8.dp)
-                                                )
-                                            }
-                                        }
-                                        Spacer(Modifier.height(4.dp))
-                                    }
-                                }
-                            }
-                        }
-
-                        if (!isUser && m.content.isNotBlank()) {
-                            Row(
-                                modifier = Modifier.padding(top = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                TextButton(
-                                    onClick = { copyPlain(ctx, m.content) },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                                ) { Text("📋 Всё", fontSize = 11.sp) }
-                                if (m.content.contains("```")) {
-                                    TextButton(
-                                        onClick = { copyAllForTermux(ctx, m.content) },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                                    ) { Text("▶ Все блоки", fontSize = 11.sp) }
-                                }
-                                if (idx == messages.size - 1 && !streaming) {
-                                    TextButton(
-                                        onClick = {
-                                            messages.removeAt(idx)
-                                            startStream()
-                                        },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                                    ) { Text("🔄 Повтор", fontSize = 11.sp) }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
-            Row(
-                Modifier.fillMaxWidth().padding(8.dp),
-                verticalAlignment = Alignment.Bottom
+            // Bottom Composer (DeepSeek rounded capsule with Thinking + Search pills)
+            val composerBg = if (isDark) Color(0xFF1B1D22) else Color(0xFFF3F4F6)
+            val composerBorder = if (isDark) Color(0xFF2D3139) else Color(0xFFE3E5EA)
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .border(1.dp, composerBorder, RoundedCornerShape(22.dp))
+                    .background(composerBg)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                OutlinedTextField(
+                BasicTextField(
                     value = input,
                     onValueChange = { input = it },
-                    modifier = Modifier.weight(1f),
-                    maxLines = 5,
-                    placeholder = { Text("Сообщение…", fontSize = 14.sp) }
-                )
-                Spacer(Modifier.width(6.dp))
-                if (streaming) {
-                    FilledTonalButton(
-                        onClick = { streamJob?.cancel() },
-                        modifier = Modifier.height(52.dp)
-                    ) { Text("⏹", fontSize = 16.sp) }
-                } else {
-                    Button(
-                        onClick = {
-                            if (input.isBlank()) return@Button
-                            val userText = input.trim()
-                            input = ""
-                            val curTitle = sessions.firstOrNull { it.id == activeSessionId }?.title
-                            if (messages.isEmpty() || curTitle == "Новый чат") {
-                                persistCurrentSession(userText.replace("\n", " ").take(36))
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 24.dp, max = 130.dp),
+                    maxLines = 6,
+                    textStyle = TextStyle(
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontSize = 15.sp,
+                        lineHeight = 21.sp
+                    ),
+                    cursorBrush = SolidColor(DeepSeekBlue),
+                    decorationBox = { innerTextField ->
+                        Box(Modifier.fillMaxWidth()) {
+                            if (input.isEmpty()) {
+                                Text(
+                                    "Написать DeepSeek…",
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
-                            messages.add(Message(role = "user", content = userText))
-                            startStream()
-                        },
-                        modifier = Modifier.height(52.dp)
-                    ) { Text("➤", fontSize = 16.sp) }
+                            innerTextField()
+                        }
+                    }
+                )
+
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ModePill(
+                        label = "🧠 Мышление",
+                        active = settings.thinkingEnabled,
+                        isDark = isDark,
+                        onClick = {
+                            val updated = settings.copy(thinkingEnabled = !settings.thinkingEnabled)
+                            settings = updated
+                            SettingsStore.save(ctx, updated)
+                        }
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    ModePill(
+                        label = "🌐 Поиск",
+                        active = settings.webSearchEnabled,
+                        isDark = isDark,
+                        onClick = {
+                            val updated = settings.copy(webSearchEnabled = !settings.webSearchEnabled)
+                            settings = updated
+                            SettingsStore.save(ctx, updated)
+                        }
+                    )
+                    Spacer(Modifier.weight(1f))
+
+                    if (streaming) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(DeepSeekBlue)
+                                .clickable { streamJob?.cancel() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("■", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        val canSend = input.isNotBlank()
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (canSend) DeepSeekBlue
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+                                )
+                                .clickable(enabled = canSend) { sendUserText(input) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("↑", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         }
     }
+}
 
-    if (showSessionsDialog) {
-        AlertDialog(
-            onDismissRequest = { showSessionsDialog = false },
-            title = { Text("Чаты (${sessions.size})", fontSize = 17.sp) },
-            text = {
-                Column(Modifier.fillMaxWidth()) {
-                    Button(
-                        onClick = {
-                            createNewSession()
-                            showSessionsDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("➕ Новый чат") }
-                    Spacer(Modifier.height(8.dp))
-                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
-                        items(sessions.size, key = { sessions[it].id }) { i ->
-                            val s = sessions[i]
-                            val selected = s.id == activeSessionId
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(
-                                        if (selected) MaterialTheme.colorScheme.primaryContainer
-                                        else Color.Transparent
-                                    )
-                                    .clickable {
-                                        switchSession(s)
-                                        showSessionsDialog = false
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        s.title,
-                                        fontSize = 13.sp,
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        "${s.messages.size} сообщ.",
-                                        fontSize = 10.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Text(
-                                    "🗑",
-                                    fontSize = 16.sp,
-                                    modifier = Modifier
-                                        .clickable { deleteSession(s.id) }
-                                        .padding(4.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showSessionsDialog = false }) { Text("Закрыть") }
-            }
+@Composable
+private fun ModePill(
+    label: String,
+    active: Boolean,
+    isDark: Boolean,
+    onClick: () -> Unit
+) {
+    val bg = when {
+        active && isDark -> Color(0xFF202B4A)
+        active -> Color(0xFFE3EBFF)
+        isDark -> Color(0xFF23262E)
+        else -> Color(0xFFFFFFFF)
+    }
+    val border = if (active) DeepSeekBlue else (if (isDark) Color(0xFF353944) else Color(0xFFD5D8DF))
+    val textCol = if (active) (if (isDark) Color(0xFF8AA4FF) else DeepSeekBlue)
+    else MaterialTheme.colorScheme.onSurfaceVariant
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = bg,
+        border = BorderStroke(1.dp, border),
+        modifier = Modifier
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+            color = textCol,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
         )
     }
 }
 
-private fun copyPlain(ctx: Context, text: String) {
+private fun copyPlain(ctx: Context, text: String, toastMsg: String = "Скопировано") {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("deepapk", text))
-    Toast.makeText(ctx, "Скопировано", Toast.LENGTH_SHORT).show()
+    Toast.makeText(ctx, toastMsg, Toast.LENGTH_SHORT).show()
 }
 
 private fun safeMarker(code: String): String {
@@ -621,31 +784,10 @@ private fun safeMarker(code: String): String {
 }
 
 private fun copyBlockForTermux(ctx: Context, lang: String, code: String) {
-    val l = lang.lowercase()
-    val payload = if (l in listOf("", "sh", "bash", "zsh", "shell")) {
-        code
-    } else {
-        val m = safeMarker(code)
-        "cat > file.$l << '$m'\n$code\n$m\n"
-    }
+    val ext = lang.lowercase().ifBlank { "txt" }
+    val m = safeMarker(code)
+    val payload = "cat > file.$ext << '$m'\n$code\n$m\n"
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("termux", payload))
     Toast.makeText(ctx, "Скопировано для Termux", Toast.LENGTH_SHORT).show()
-}
-
-private fun copyAllForTermux(ctx: Context, text: String) {
-    val blocks = parseSegments(text).filterIsInstance<MsgSegment.Code>()
-    val payload = blocks.joinToString("\n") { b ->
-        val l = b.lang.lowercase()
-        if (l in listOf("sh", "bash", "zsh", "shell")) {
-            b.code
-        } else {
-            val ext = l.ifBlank { "txt" }
-            val m = safeMarker(b.code)
-            "cat > file.$ext << '$m'\n${b.code}\n$m"
-        }
-    }
-    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cm.setPrimaryClip(ClipData.newPlainText("termux", payload))
-    Toast.makeText(ctx, "Скопировано для Termux (${blocks.size})", Toast.LENGTH_SHORT).show()
 }

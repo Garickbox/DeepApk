@@ -15,12 +15,41 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+
+val DeepSeekBlue = Color(0xFF4D6BFE)
+
+private val DeepDarkColors = darkColorScheme(
+    primary = DeepSeekBlue,
+    onPrimary = Color.White,
+    background = Color(0xFF111215),
+    onBackground = Color(0xFFE7E9EE),
+    surface = Color(0xFF181A1F),
+    onSurface = Color(0xFFE7E9EE),
+    surfaceVariant = Color(0xFF232733),
+    onSurfaceVariant = Color(0xFFB3BAC6),
+    primaryContainer = Color(0xFF232B42),
+    onPrimaryContainer = Color(0xFFE8EEFF)
+)
+
+private val DeepLightColors = lightColorScheme(
+    primary = DeepSeekBlue,
+    onPrimary = Color.White,
+    background = Color(0xFFFFFFFF),
+    onBackground = Color(0xFF1A1C1E),
+    surface = Color(0xFFF7F8FA),
+    onSurface = Color(0xFF1A1C1E),
+    surfaceVariant = Color(0xFFF0F2F5),
+    onSurfaceVariant = Color(0xFF5A606D),
+    primaryContainer = Color(0xFFEFF4FF),
+    onPrimaryContainer = Color(0xFF1A1C1E)
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
+            val colors = if (isSystemInDarkTheme()) DeepDarkColors else DeepLightColors
             MaterialTheme(colorScheme = colors) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
