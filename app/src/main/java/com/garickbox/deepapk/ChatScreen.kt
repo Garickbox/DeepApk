@@ -4,7 +4,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
-import android.provider.OpenableColumns
 import android.util.TypedValue
 import android.view.ViewGroup
 import android.widget.ScrollView
@@ -61,41 +60,24 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private data class AttachedFile(
-    val name: String,
-    val sizeLabel: String,
-    val content: String
-)
-
-private fun readAttachment(ctx: Context, uri: Uri): AttachedFile? {
-    return try {
-        var name = "file.txt"
-        var sizeBytes = 0L
-        ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
-            if (c.moveToFirst()) {
-                val nameIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                val sizeIdx = c.getColumnIndex(OpenableColumns.SIZE)
-                if (nameIdx >= 0) name = c.getString(nameIdx) ?: name
-                if (sizeIdx >= 0) sizeBytes = c.getLong(sizeIdx)
-            }
-        }
-        val rawBytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
-        val maxBytes = 300_000
-        val truncated = rawBytes.size > maxBytes
-        val slice = if (truncated) rawBytes.copyOf(maxBytes) else rawBytes
-        val text = String(slice, Charsets.UTF_8) + if (truncated) "\n\n... [обрезано до 300 KB]" else ""
-        val kb = (if (sizeBytes > 0) sizeBytes else rawBytes.size.toLong()) / 1024
-        val label = if (kb > 0) "${kb}KB" else "${rawBytes.size}B"
-        AttachedFile(name = name, sizeLabel = label, content = text)
-    } catch (_: Exception) {
-        null
-    }
+private sealed class ChatFeedItem(val key: String) {
+    data class UserBubble(val msgIdx: Int, val msg: Message) : ChatFeedItem("u_${msg.id}")
+    data class AssistantReasoning(val msgIdx: Int, val msg: Message) : ChatFeedItem("r_${msg.id}")
+    data class AssistantPending(val msgIdx: Int, val msg: Message) : ChatFeedItem("p_${msg.id}")
+    data class AssistantBlock(val msgIdx: Int, val msg: Message, val blockIdx: Int, val block: MdBlock) :
+        ChatFeedItem("b_${msg.id}_$blockIdx")
+    data class AssistantFooter(val msgIdx: Int, val msg: Message) : ChatFeedItem("f_${msg.id}")
 }
+
+private const val SECTOR_SIZE = 28
+private const val SECTOR_STEP = 20
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     isDark: Boolean,
+    incomingShare: IncomingShare? = null,
+    onConsumeShare: () -> Unit = {},
     onOpenSettings: () -> Unit
 ) {
     val ctx = LocalContext.current
@@ -161,6 +143,18 @@ fun ChatScreen(
     var showPresetsDialog by remember { mutableStateOf(false) }
     var editingPreset by remember { mutableStateOf<PromptPreset?>(null) }
     var addSkillDraft by remember { mutableStateOf<String?>(null) }
+    var sectorEnd by remember { mutableStateOf(messages.size) }
+    var sectorStart by remember { mutableStateOf((messages.size - SECTOR_SIZE).coerceAtLeast(0)) }
+
+    fun resetSectorToTail() {
+        sectorEnd = messages.size
+        sectorStart = (messages.size - SECTOR_SIZE).coerceAtLeast(0)
+    }
+
+    fun focusSectorAround(msgIdx: Int) {
+        sectorStart = (msgIdx - 10).coerceAtLeast(0)
+        sectorEnd = (msgIdx + 20).coerceAtMost(messages.size)
+    }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -176,7 +170,8 @@ fun ChatScreen(
     LaunchedEffect(Unit) {
         settings = SettingsStore.load(ctx)
         if (messages.isNotEmpty()) {
-            listState.scrollToItem(messages.size)
+            resetSectorToTail()
+            listState.scrollToItem(9999)
         }
         if (settings.apiKey.isNotBlank()) {
             val b = withContext(Dispatchers.IO) { DeepSeekApi.fetchBalance(settings.apiKey) }
@@ -190,10 +185,13 @@ fun ChatScreen(
         if (idx >= 0) {
             val cur = sessions[idx]
             val title = customTitle ?: cur.title
-            sessions[idx] = cur.copy(title = title, updatedAt = now, messages = messages.toList())
+            val updated = cur.copy(title = title, updatedAt = now, messages = messages.toList())
+            sessions[idx] = updated
+            ChatStore.saveSessionAndIndexAsync(ctx, updated, sessions.toList())
+        } else {
+            ChatStore.saveSessions(ctx, sessions.toList())
         }
         ChatStore.setActiveSessionId(ctx, activeSessionId)
-        ChatStore.saveSessions(ctx, sessions.toList())
     }
 
     fun setChatPreset(pid: String) {
@@ -209,14 +207,21 @@ fun ChatScreen(
         if (streaming) return
         activeSessionId = session.id
         activePresetId = session.presetId
+        val loadedMsgs = if (session.messages.isNotEmpty()) session.messages
+        else ChatStore.loadSessionMessages(ctx, session.id)
+        val sIdx = sessions.indexOfFirst { it.id == session.id }
+        if (sIdx >= 0 && sessions[sIdx].messages.isEmpty() && loadedMsgs.isNotEmpty()) {
+            sessions[sIdx] = sessions[sIdx].copy(messages = loadedMsgs)
+        }
         messages.clear()
-        messages.addAll(session.messages)
+        messages.addAll(loadedMsgs)
+        resetSectorToTail()
         reasoningExpanded = emptySet()
         error = ""
         searchInfo = ""
         ChatStore.setActiveSessionId(ctx, session.id)
         if (messages.isNotEmpty()) {
-            scope.launch { listState.scrollToItem(messages.size) }
+            scope.launch { listState.scrollToItem(9999) }
         }
     }
 
@@ -236,6 +241,7 @@ fun ChatScreen(
     fun deleteSession(id: String) {
         if (streaming) return
         sessions.removeAll { it.id == id }
+        ChatStore.deleteSessionFiles(ctx, id)
         if (sessions.isEmpty()) {
             sessions.add(
                 ChatSession(
@@ -270,10 +276,13 @@ fun ChatScreen(
         if (continueTargetIdx != null) {
             messages[targetIdx] = messages[targetIdx].copy(truncated = false)
         }
-        if (scrollAnchorIdx != null && scrollAnchorIdx in messages.indices) {
-            scope.launch { listState.animateScrollToItem(scrollAnchorIdx) }
-        } else if (continueTargetIdx == null && targetIdx > 0) {
-            scope.launch { listState.animateScrollToItem(targetIdx - 1) }
+        resetSectorToTail()
+        val anchorMsg = scrollAnchorIdx ?: (targetIdx - 1).coerceAtLeast(0)
+        scope.launch {
+            kotlinx.coroutines.yield()
+            val pos = messages.subList(sectorStart, sectorEnd.coerceAtMost(messages.size))
+                .indexOfFirst { it.id == messages.getOrNull(anchorMsg)?.id }
+            if (pos >= 0) listState.animateScrollToItem(pos + if (sectorStart > 0) 1 else 0)
         }
         streaming = true
         streamJob = scope.launch {
@@ -727,123 +736,140 @@ fun ChatScreen(
                             )
                         }
                     } else {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 14.dp),
-                            reverseLayout = false,
-                            contentPadding = PaddingValues(top = 10.dp, bottom = 52.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            items(
-                                count = messages.size,
-                                key = { idx -> messages[idx].id }
-                            ) { idx ->
-                                val m = messages[idx]
-                                val isUser = m.role == "user"
-
-                                if (isUser) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End
-                                    ) {
-                                        Surface(
-                                            shape = RoundedCornerShape(18.dp),
-                                            color = MaterialTheme.colorScheme.primaryContainer,
-                                            modifier = Modifier
-                                                .widthIn(max = 310.dp)
-                                                .clip(RoundedCornerShape(18.dp))
-                                                .combinedClickable(
-                                                    onClick = {},
-                                                    onLongClick = { contextMenuMsg = m }
-                                                )
-                                        ) {
-                                            Text(
-                                                text = m.content,
-                                                fontSize = settings.fontSizeSp.sp,
-                                                lineHeight = (settings.fontSizeSp + 6).sp,
-                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                                            )
+                        val safeStart = sectorStart.coerceIn(0, messages.size)
+                        val safeEnd = sectorEnd.coerceIn(safeStart, messages.size)
+                        val feedItems = remember(messages.toList(), safeStart, safeEnd, streaming) {
+                            buildList<ChatFeedItem> {
+                                for (i in safeStart until safeEnd) {
+                                    val msg = messages[i]
+                                    if (msg.role == "user") {
+                                        add(ChatFeedItem.UserBubble(i, msg))
+                                    } else {
+                                        if (msg.reasoning.isNotBlank()) add(ChatFeedItem.AssistantReasoning(i, msg))
+                                        if (msg.content.isBlank() && streaming && i == messages.size - 1) {
+                                            add(ChatFeedItem.AssistantPending(i, msg))
+                                        } else {
+                                            val blocks = parseMarkdownBlocksCached(msg.content)
+                                            blocks.forEachIndexed { bIdx, b ->
+                                                add(ChatFeedItem.AssistantBlock(i, msg, bIdx, b))
+                                            }
+                                        }
+                                        if (msg.content.isNotBlank() && !(streaming && i == messages.size - 1)) {
+                                            add(ChatFeedItem.AssistantFooter(i, msg))
                                         }
                                     }
-                                } else {
-                                    val textColor = MaterialTheme.colorScheme.onBackground
-                                    val thoughtBarColor = if (isDark) Color(0xFF3E4554) else Color(0xFFD0D5DD)
-                                    val thoughtBg = if (isDark) Color(0xFF181A1F) else Color(0xFFF6F7F9)
+                                }
+                            }
+                        }
 
-                                    Column(
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
+                            reverseLayout = false,
+                            contentPadding = PaddingValues(top = 10.dp, bottom = 52.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            if (safeStart > 0) {
+                                item(key = "load_older_sector") {
+                                    Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .combinedClickable(
-                                                onClick = {},
-                                                onLongClick = { contextMenuMsg = m }
-                                            )
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(MaterialTheme.colorScheme.surface)
+                                            .clickable {
+                                                val ns = (safeStart - SECTOR_STEP).coerceAtLeast(0)
+                                                sectorStart = ns
+                                                if (safeEnd - ns > 55) sectorEnd = ns + 55
+                                            }
+                                            .padding(vertical = 10.dp),
+                                        contentAlignment = Alignment.Center
                                     ) {
-                                        if (m.reasoning.isNotBlank()) {
-                                            val expanded = m.id in reasoningExpanded
-                                            Column(
+                                        Text(
+                                            "▲ Показать предыдущие (скрыто $safeStart)",
+                                            fontSize = 12.5.sp,
+                                            color = DeepSeekBlue,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+
+                            items(count = feedItems.size, key = { feedItems[it].key }) { fIdx ->
+                                when (val item = feedItems[fIdx]) {
+                                    is ChatFeedItem.UserBubble -> {
+                                        Row(modifier = Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.End) {
+                                            Surface(
+                                                shape = RoundedCornerShape(18.dp),
+                                                color = MaterialTheme.colorScheme.primaryContainer,
                                                 modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clip(RoundedCornerShape(12.dp))
-                                                    .background(thoughtBg)
-                                                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                                                    .widthIn(max = 310.dp)
+                                                    .clip(RoundedCornerShape(18.dp))
+                                                    .combinedClickable(onClick = {}, onLongClick = { contextMenuMsg = item.msg })
                                             ) {
                                                 Text(
-                                                    text = (if (expanded) "▼ " else "▶ ") +
-                                                        "Рассуждение (${m.reasoning.length} симв.)",
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    text = item.msg.content,
+                                                    fontSize = settings.fontSizeSp.sp,
+                                                    lineHeight = (settings.fontSizeSp + 6).sp,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    is ChatFeedItem.AssistantReasoning -> {
+                                        val m = item.msg
+                                        val thoughtBarColor = if (isDark) Color(0xFF3E4554) else Color(0xFFD0D5DD)
+                                        val thoughtBg = if (isDark) Color(0xFF181A1F) else Color(0xFFF6F7F9)
+                                        val expanded = m.id in reasoningExpanded
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(thoughtBg)
+                                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                                        ) {
+                                            Text(
+                                                text = (if (expanded) "▼ " else "▶ ") + "Рассуждение (${m.reasoning.length} симв.)",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.fillMaxWidth().clickable {
+                                                    reasoningExpanded = if (expanded) reasoningExpanded - m.id else reasoningExpanded + m.id
+                                                }
+                                            )
+                                            if (expanded) {
+                                                Spacer(Modifier.height(6.dp))
+                                                Box(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
-                                                        .clickable {
-                                                            reasoningExpanded = if (expanded) {
-                                                                reasoningExpanded - m.id
-                                                            } else {
-                                                                reasoningExpanded + m.id
-                                                            }
+                                                        .drawBehind {
+                                                            drawLine(thoughtBarColor, Offset(0f, 0f), Offset(0f, size.height), 2.dp.toPx())
                                                         }
-                                                )
-                                                if (expanded) {
-                                                    Spacer(Modifier.height(6.dp))
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .drawBehind {
-                                                                drawLine(
-                                                                    color = thoughtBarColor,
-                                                                    start = Offset(0f, 0f),
-                                                                    end = Offset(0f, size.height),
-                                                                    strokeWidth = 2.dp.toPx()
-                                                                )
-                                                            }
-                                                            .padding(start = 10.dp)
-                                                    ) {
-                                                        Text(
-                                                            text = m.reasoning,
-                                                            fontSize = 12.sp,
-                                                            lineHeight = 17.sp,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                            fontFamily = FontFamily.Monospace
-                                                        )
-                                                    }
+                                                        .padding(start = 10.dp)
+                                                ) {
+                                                    Text(
+                                                        text = m.reasoning,
+                                                        fontSize = 12.sp,
+                                                        lineHeight = 17.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        fontFamily = FontFamily.Monospace
+                                                    )
                                                 }
                                             }
-                                            Spacer(Modifier.height(8.dp))
                                         }
-
-                                        if (m.content.isBlank() && streaming && idx == messages.size - 1) {
-                                            Text(
-                                                "Печатаю…",
-                                                fontSize = 14.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        } else {
-                                            MarkdownMessageContent(
-                                                content = m.content,
-                                                textColor = textColor,
+                                    }
+                                    is ChatFeedItem.AssistantPending -> {
+                                        Text("Печатаю…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    is ChatFeedItem.AssistantBlock -> {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .combinedClickable(onClick = {}, onLongClick = { contextMenuMsg = item.msg })
+                                        ) {
+                                            RenderMdBlock(
+                                                block = item.block,
+                                                textColor = MaterialTheme.colorScheme.onBackground,
                                                 isDark = isDark,
                                                 fontSizeSp = settings.fontSizeSp,
                                                 onCopyCode = { _, code -> copyPlain(ctx, code, "Код скопирован") },
@@ -851,60 +877,77 @@ fun ChatScreen(
                                                 onCopyTable = { txt, toast -> copyPlain(ctx, txt, toast) }
                                             )
                                         }
-
-                                        if (m.content.isNotBlank() && !(streaming && idx == messages.size - 1)) {
-                                            Spacer(Modifier.height(6.dp))
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                                            ) {
+                                    }
+                                    is ChatFeedItem.AssistantFooter -> {
+                                        val m = item.msg
+                                        val idx = item.msgIdx
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                            modifier = Modifier.padding(bottom = 6.dp)
+                                        ) {
+                                            Text(
+                                                "❐",
+                                                fontSize = 15.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.clickable { copyPlain(ctx, m.content, "Ответ скопирован") }.padding(vertical = 2.dp)
+                                            )
+                                            if (idx == messages.size - 1 && !streaming) {
                                                 Text(
-                                                    "❐",
-                                                    fontSize = 15.sp,
+                                                    "↻",
+                                                    fontSize = 16.sp,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier
-                                                        .clickable { copyPlain(ctx, m.content, "Ответ скопирован") }
-                                                        .padding(vertical = 2.dp)
+                                                    modifier = Modifier.clickable {
+                                                        messages.removeAt(idx)
+                                                        startStream()
+                                                    }.padding(vertical = 2.dp)
                                                 )
-                                                if (idx == messages.size - 1 && !streaming) {
-                                                    Text(
-                                                        "↻",
-                                                        fontSize = 16.sp,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                        modifier = Modifier
-                                                            .clickable {
-                                                                messages.removeAt(idx)
-                                                                startStream()
-                                                            }
-                                                            .padding(vertical = 2.dp)
-                                                    )
-                                                    Text(
-                                                        if (m.truncated) "⏭ Продолжить (обрыв)" else "⏭ Продолжить",
-                                                        fontSize = 12.sp,
-                                                        fontWeight = if (m.truncated) FontWeight.SemiBold else FontWeight.Normal,
-                                                        color = if (m.truncated) DeepSeekBlue
-                                                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                        modifier = Modifier
-                                                            .clickable { startStream(continueTargetIdx = idx) }
-                                                            .padding(vertical = 2.dp)
-                                                    )
-                                                }
-                                                Spacer(Modifier.weight(1f))
-                                                if (m.usage.isNotBlank()) {
-                                                    Text(
-                                                        m.usage,
-                                                        fontSize = 11.sp,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-                                                    )
-                                                }
+                                                Text(
+                                                    if (m.truncated) "⏭ Продолжить (обрыв)" else "⏭ Продолжить",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = if (m.truncated) FontWeight.SemiBold else FontWeight.Normal,
+                                                    color = if (m.truncated) DeepSeekBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.clickable { startStream(continueTargetIdx = idx) }.padding(vertical = 2.dp)
+                                                )
+                                            }
+                                            Spacer(Modifier.weight(1f))
+                                            if (m.usage.isNotBlank()) {
+                                                Text(
+                                                    m.usage,
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                                                )
                                             }
                                         }
                                     }
                                 }
                             }
-                            item(key = "bottom_anchor") {
-                                Spacer(Modifier.height(4.dp))
+
+                            if (safeEnd < messages.size) {
+                                item(key = "load_newer_sector") {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(MaterialTheme.colorScheme.surface)
+                                            .clickable {
+                                                val ne = (safeEnd + SECTOR_STEP).coerceAtMost(messages.size)
+                                                sectorEnd = ne
+                                                if (ne - safeStart > 55) sectorStart = ne - 55
+                                            }
+                                            .padding(vertical = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "▼ Показать новее (ещё ${messages.size - safeEnd})",
+                                            fontSize = 12.5.sp,
+                                            color = DeepSeekBlue,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
                             }
+                            item(key = "bottom_anchor") { Spacer(Modifier.height(4.dp)) }
                         }
 
                         val userAnchors = remember(messages.toList()) {
@@ -1151,7 +1194,19 @@ fun ChatScreen(
                                     .fillMaxWidth()
                                     .clickable {
                                         showAnchorsDialog = false
-                                        scope.launch { listState.animateScrollToItem(msgIdx) }
+                                        focusSectorAround(msgIdx)
+                                        scope.launch {
+                                            kotlinx.coroutines.yield()
+                                            var offset = if (sectorStart > 0) 1 else 0
+                                            for (i in sectorStart until msgIdx.coerceAtMost(sectorEnd)) {
+                                                val pm = messages[i]
+                                                offset += if (pm.role == "user") 1 else {
+                                                    (if (pm.reasoning.isNotBlank()) 1 else 0) +
+                                                        parseMarkdownBlocksCached(pm.content).size.coerceAtLeast(1) + 1
+                                                }
+                                            }
+                                            listState.animateScrollToItem(offset)
+                                        }
                                     }
                                     .padding(vertical = 10.dp),
                                 verticalAlignment = Alignment.Top
@@ -1580,6 +1635,128 @@ fun ChatScreen(
                             },
                             shape = RoundedCornerShape(10.dp)
                         ) { Text("Сохранить") }
+                    }
+                }
+            }
+        }
+    }
+
+    // Incoming Share Picker Dialog
+    incomingShare?.let { share ->
+        val hasDocx = share.files.any { it.name.endsWith(".docx", ignoreCase = true) }
+        var sharePresetId by remember(share.id) { mutableStateOf(if (hasDocx) "docx_report" else "default") }
+        val recentFive = remember(sessions.toList()) {
+            sessions.sortedByDescending { it.updatedAt }.take(5)
+        }
+        val dividerCol = if (isDark) Color(0xFF2B2F38) else Color(0xFFF0F1F4)
+
+        fun applyShareToCurrent() {
+            if (share.text.isNotBlank()) {
+                input = if (input.isBlank()) share.text else "${input.trimEnd()}\n\n${share.text}"
+            }
+            share.files.forEach { attachments.add(it) }
+            onConsumeShare()
+        }
+
+        Dialog(
+            onDismissRequest = onConsumeShare,
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = if (isDark) Color(0xFF1F2229) else Color.White,
+                modifier = Modifier.fillMaxWidth(0.94f).heightIn(max = 640.dp)
+            ) {
+                Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("📥 Принято из мессенджера", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text("✕", fontSize = 18.sp, modifier = Modifier.clickable { onConsumeShare() }.padding(4.dp))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    if (share.files.isNotEmpty()) {
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            share.files.forEach { f ->
+                                Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface) {
+                                    Text("📎 ${f.name} (${f.sizeLabel})", fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp))
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    if (share.text.isNotBlank()) {
+                        Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                share.text.take(220),
+                                fontSize = 12.5.sp,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                        Spacer(Modifier.height(10.dp))
+                    }
+
+                    Text("➕ Новый чат с ролью:", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        presets.forEach { p ->
+                            ModePill(
+                                label = "${p.emoji} ${p.name}",
+                                active = sharePresetId == p.id,
+                                isDark = isDark,
+                                onClick = { sharePresetId = p.id }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            val newSess = ChatSession(
+                                id = System.currentTimeMillis().toString(),
+                                title = "Новый чат",
+                                updatedAt = System.currentTimeMillis(),
+                                messages = emptyList(),
+                                presetId = sharePresetId
+                            )
+                            sessions.add(0, newSess)
+                            switchSession(newSess)
+                            setChatPreset(sharePresetId)
+                            applyShareToCurrent()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        val pObj = presets.firstOrNull { it.id == sharePresetId }
+                        Text("Открыть в новом чате (${pObj?.emoji ?: ""} ${pObj?.name ?: ""})")
+                    }
+
+                    if (recentFive.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("Или добавить в последние чаты:", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(6.dp))
+                        recentFive.forEachIndexed { idx, s ->
+                            val rp = presets.firstOrNull { it.id == s.presetId }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        switchSession(s)
+                                        applyShareToCurrent()
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(rp?.emoji ?: "💬", fontSize = 16.sp, modifier = Modifier.width(26.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(s.title, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(rp?.name ?: "Обычный", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text("→", color = DeepSeekBlue, fontWeight = FontWeight.Bold)
+                            }
+                            if (idx < recentFive.lastIndex) HorizontalDivider(color = dividerCol)
+                        }
                     }
                 }
             }

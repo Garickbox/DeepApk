@@ -1,5 +1,6 @@
 package com.garickbox.deepapk
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -46,8 +47,17 @@ private val DeepLightColors = lightColorScheme(
 )
 
 class MainActivity : ComponentActivity() {
+    private var incomingShareState = mutableStateOf<IncomingShare?>(null)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        extractIncomingShare(this, intent)?.let { incomingShareState.value = it }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        incomingShareState.value = extractIncomingShare(this, intent)
         setContent {
             var themeMode by remember { mutableStateOf(SettingsStore.load(this).themeMode) }
             val sysDark = isSystemInDarkTheme()
@@ -68,6 +78,8 @@ class MainActivity : ComponentActivity() {
                     when (screen) {
                         "chat" -> ChatScreen(
                             isDark = isDark,
+                            incomingShare = incomingShareState.value,
+                            onConsumeShare = { incomingShareState.value = null },
                             onOpenSettings = { screen = "settings" }
                         )
                         "settings" -> SettingsScreen(

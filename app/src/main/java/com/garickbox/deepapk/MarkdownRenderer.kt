@@ -9,7 +9,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
+import android.util.LruCache
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +52,17 @@ private fun splitTableRow(line: String): List<String> {
     if (s.startsWith("|")) s = s.drop(1)
     if (s.endsWith("|")) s = s.dropLast(1)
     return s.split("|").map { it.trim() }
+}
+
+private val mdBlockCache = LruCache<String, List<MdBlock>>(96)
+
+fun parseMarkdownBlocksCached(input: String): List<MdBlock> {
+    if (input.isEmpty()) return emptyList()
+    val key = "${input.length}:${input.hashCode()}"
+    mdBlockCache.get(key)?.let { return it }
+    val parsed = parseMarkdownBlocks(input)
+    mdBlockCache.put(key, parsed)
+    return parsed
 }
 
 fun parseMarkdownBlocks(input: String): List<MdBlock> {
@@ -514,18 +529,31 @@ fun MarkdownMessageContent(
     onCopyTermux: (lang: String, code: String) -> Unit,
     onCopyTable: (text: String, toast: String) -> Unit = { _, _ -> }
 ) {
-    val blocks = remember(content) { parseMarkdownBlocks(content) }
+    val blocks = remember(content) { parseMarkdownBlocksCached(content) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        blocks.forEach { block ->
+            RenderMdBlock(block, textColor, isDark, fontSizeSp, onCopyCode, onCopyTermux, onCopyTable)
+        }
+    }
+}
+
+@Composable
+fun RenderMdBlock(
+    block: MdBlock,
+    textColor: Color,
+    isDark: Boolean,
+    fontSizeSp: Int = 15,
+    onCopyCode: (lang: String, code: String) -> Unit,
+    onCopyTermux: (lang: String, code: String) -> Unit,
+    onCopyTable: (text: String, toast: String) -> Unit = { _, _ -> }
+) {
     val linkColor = if (isDark) Color(0xFF7FA2FF) else DeepSeekBlue
     val inlineCodeBg = if (isDark) Color(0xFF282C34) else Color(0xFFECEFF4)
     val quoteBarColor = if (isDark) Color(0xFF3E4554) else Color(0xFFD0D5DD)
-
     val codeBg = if (isDark) Color(0xFF1A1C22) else Color(0xFFF7F8FA)
     val codeBorder = if (isDark) Color(0xFF2D3139) else Color(0xFFE6E8EE)
     val codeHeaderDivider = if (isDark) Color(0xFF2A2E37) else Color(0xFFEAECF0)
     val codeHeaderText = if (isDark) Color(0xFF9AA0A6) else Color(0xFF6B7280)
-
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        blocks.forEach { block ->
             when (block) {
                 is MdBlock.Divider -> {
                     HorizontalDivider(
@@ -689,8 +717,15 @@ fun MarkdownMessageContent(
                 }
 
                 is MdBlock.Code -> {
-                    val highlighted = remember(block.code, isDark) {
-                        highlightCode(block.code, isDark)
+                    val totalLines = remember(block.code) { block.code.count { it == '\n' } + 1 }
+                    val isHuge = totalLines > 28 || block.code.length > 3500
+                    var codeExpanded by remember(block.code.hashCode(), block.code.length) { mutableStateOf(false) }
+                    val shownCode = remember(block.code, isHuge, codeExpanded) {
+                        if (!isHuge || codeExpanded) block.code
+                        else block.code.lineSequence().take(24).joinToString("\n")
+                    }
+                    val highlighted = remember(shownCode, isDark) {
+                        if (shownCode.length > 12000) AnnotatedString(shownCode) else highlightCode(shownCode, isDark)
                     }
                     Column(
                         modifier = Modifier
@@ -740,9 +775,21 @@ fun MarkdownMessageContent(
                                 .horizontalScroll(rememberScrollState())
                                 .padding(12.dp)
                         )
+                        if (isHuge) {
+                            HorizontalDivider(color = codeHeaderDivider)
+                            Text(
+                                text = if (codeExpanded) "▲ Свернуть ($totalLines стр.)"
+                                else "▼ Показать весь код (ещё ${(totalLines - 24).coerceAtLeast(1)} стр.)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = DeepSeekBlue,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { codeExpanded = !codeExpanded }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
                     }
                 }
-            }
-        }
     }
 }
