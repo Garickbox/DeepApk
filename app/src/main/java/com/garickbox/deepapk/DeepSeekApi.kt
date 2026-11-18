@@ -16,7 +16,7 @@ sealed class StreamEvent {
     data class Content(val delta: String) : StreamEvent()
     data class SearchInfo(val queries: Int) : StreamEvent()
     data class Error(val msg: String) : StreamEvent()
-    data class Done(val usage: String = "") : StreamEvent()
+    object Done : StreamEvent()
 }
 
 object DeepSeekApi {
