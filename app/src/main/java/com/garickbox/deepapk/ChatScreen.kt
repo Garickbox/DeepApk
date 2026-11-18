@@ -5,7 +5,14 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.TypedValue
+import android.view.ViewGroup
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.DialogProperties
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -145,6 +152,15 @@ fun ChatScreen(
     var selectTextMsg by remember { mutableStateOf<Message?>(null) }
     var codePickerBlocks by remember { mutableStateOf<List<MdBlock.Code>?>(null) }
     var showAnchorsDialog by remember { mutableStateOf(false) }
+    var presets by remember { mutableStateOf(PresetStore.load(ctx)) }
+    var activePresetId by remember {
+        mutableStateOf(
+            sessions.firstOrNull { it.id == activeSessionId }?.presetId ?: "default"
+        )
+    }
+    var showPresetsDialog by remember { mutableStateOf(false) }
+    var editingPreset by remember { mutableStateOf<PromptPreset?>(null) }
+    var addSkillDraft by remember { mutableStateOf<String?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -180,9 +196,19 @@ fun ChatScreen(
         ChatStore.saveSessions(ctx, sessions.toList())
     }
 
+    fun setChatPreset(pid: String) {
+        activePresetId = pid
+        val idx = sessions.indexOfFirst { it.id == activeSessionId }
+        if (idx >= 0) {
+            sessions[idx] = sessions[idx].copy(presetId = pid)
+            ChatStore.saveSessions(ctx, sessions.toList())
+        }
+    }
+
     fun switchSession(session: ChatSession) {
         if (streaming) return
         activeSessionId = session.id
+        activePresetId = session.presetId
         messages.clear()
         messages.addAll(session.messages)
         reasoningExpanded = emptySet()
@@ -269,9 +295,12 @@ fun ChatScreen(
                 lastFlush = now
             }
 
+            val activePreset = presets.firstOrNull { it.id == activePresetId } ?: presets.first()
+            val extraGlobal = if (settings.systemPrompt.trim() == AppSettings.DEFAULT_SYSTEM_PROMPT.trim()) "" else settings.systemPrompt.trim()
+            val effectiveSettings = settings.copy(systemPrompt = activePreset.buildSystemPrompt(extraGlobal))
             try {
                 DeepSeekApi.chatStream(
-                    settings = settings,
+                    settings = effectiveSettings,
                     history = historySlice,
                     continuation = continueTargetIdx != null
                 ).collect { ev ->
@@ -308,6 +337,20 @@ fun ChatScreen(
                 error = e.message ?: "unknown"
             } finally {
                 flushDeltas(true)
+                val doneMsg = messages.getOrNull(targetIdx)
+                if (doneMsg != null && doneMsg.content.contains("<skill_save>")) {
+                    val rx = Regex("<skill_save>([\\s\\S]*?)</skill_save>")
+                    val rules = rx.findAll(doneMsg.content).map { it.groupValues[1].trim() }.filter { it.isNotBlank() }.toList()
+                    if (rules.isNotEmpty()) {
+                        val targetPid = if (activePresetId == "default") "termux" else activePresetId
+                        rules.forEach { PresetStore.appendSkill(ctx, targetPid, it) }
+                        presets = PresetStore.load(ctx)
+                        val tName = presets.firstOrNull { it.id == targetPid }?.name ?: targetPid
+                        val clean = rx.replace(doneMsg.content, "").trimEnd() +
+                            "\n\n> 🧠 Правило сохранено в заготовку «$tName»"
+                        messages[targetIdx] = doneMsg.copy(content = clean)
+                    }
+                }
                 val last = messages.getOrNull(targetIdx)
                 if (continueTargetIdx == null && last != null && last.content.isBlank() && last.reasoning.isBlank()) {
                     messages.removeAt(targetIdx)
@@ -993,32 +1036,47 @@ fun ChatScreen(
                     )
 
                     Spacer(Modifier.height(12.dp))
+                    val curPreset = presets.firstOrNull { it.id == activePresetId } ?: presets.first()
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        ModePill(
-                            label = "⚛ Рассуждение",
-                            active = settings.thinkingEnabled,
-                            isDark = isDark,
-                            onClick = {
-                                val updated = settings.copy(thinkingEnabled = !settings.thinkingEnabled)
-                                settings = updated
-                                SettingsStore.save(ctx, updated)
-                            }
-                        )
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .horizontalScroll(rememberScrollState()),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            ModePill(
+                                label = "⚛ Рассуждение",
+                                active = settings.thinkingEnabled,
+                                isDark = isDark,
+                                onClick = {
+                                    val updated = settings.copy(thinkingEnabled = !settings.thinkingEnabled)
+                                    settings = updated
+                                    SettingsStore.save(ctx, updated)
+                                }
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            ModePill(
+                                label = "🌐 Поиск",
+                                active = settings.webSearchEnabled,
+                                isDark = isDark,
+                                onClick = {
+                                    val updated = settings.copy(webSearchEnabled = !settings.webSearchEnabled)
+                                    settings = updated
+                                    SettingsStore.save(ctx, updated)
+                                }
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            ModePill(
+                                label = "${curPreset.emoji} ${curPreset.name} ▾",
+                                active = curPreset.id != "default",
+                                isDark = isDark,
+                                onClick = { showPresetsDialog = true }
+                            )
+                        }
                         Spacer(Modifier.width(8.dp))
-                        ModePill(
-                            label = "🌐 Поиск",
-                            active = settings.webSearchEnabled,
-                            isDark = isDark,
-                            onClick = {
-                                val updated = settings.copy(webSearchEnabled = !settings.webSearchEnabled)
-                                settings = updated
-                                SettingsStore.save(ctx, updated)
-                            }
-                        )
-                        Spacer(Modifier.weight(1f))
 
                         Box(
                             modifier = Modifier
@@ -1178,6 +1236,12 @@ fun ChatScreen(
                             }
                         }
                     }
+                    HorizontalDivider(color = dividerCol)
+                    ContextMenuItem("📌", "В правила заготовки") {
+                        val txt = m.content.trim().take(600)
+                        contextMenuMsg = null
+                        addSkillDraft = txt
+                    }
                     if (hasCode) {
                         HorizontalDivider(color = dividerCol)
                         ContextMenuItem("▶", "Передать в Termux", accent = DeepSeekBlue) {
@@ -1249,13 +1313,17 @@ fun ChatScreen(
         }
     }
 
-    // Selectable Text Dialog ("Выбрать текст")
+    // Selectable Text Dialog ("Выбрать текст") with native TextView auto-scroll
     selectTextMsg?.let { m ->
-        Dialog(onDismissRequest = { selectTextMsg = null }) {
+        val textColArgb = MaterialTheme.colorScheme.onBackground.toArgb()
+        Dialog(
+            onDismissRequest = { selectTextMsg = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = if (isDark) Color(0xFF1F2229) else Color.White,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp)
+                modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.84f)
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1272,18 +1340,32 @@ fun ChatScreen(
                         )
                     }
                     Spacer(Modifier.height(10.dp))
-                    SelectionContainer(
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        Text(
-                            text = m.content,
-                            fontSize = 14.sp,
-                            lineHeight = 20.sp,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                    }
+                    AndroidView(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        factory = { c ->
+                            ScrollView(c).apply {
+                                isFillViewport = true
+                                val tv = TextView(c).apply {
+                                    setTextIsSelectable(true)
+                                    setLineSpacing(0f, 1.35f)
+                                    setPadding(6, 6, 6, 32)
+                                }
+                                addView(
+                                    tv,
+                                    ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.WRAP_CONTENT
+                                    )
+                                )
+                            }
+                        },
+                        update = { sv ->
+                            val tv = sv.getChildAt(0) as TextView
+                            if (tv.text.toString() != m.content) tv.text = m.content
+                            tv.setTextColor(textColArgb)
+                            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, settings.fontSizeSp.toFloat())
+                        }
+                    )
                     Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = {
@@ -1293,6 +1375,261 @@ fun ChatScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     ) { Text("Копировать всё") }
+                }
+            }
+        }
+    }
+
+    // Presets picker dialog
+    if (showPresetsDialog) {
+        val dividerCol = if (isDark) Color(0xFF2B2F38) else Color(0xFFF0F1F4)
+        Dialog(
+            onDismissRequest = { showPresetsDialog = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = if (isDark) Color(0xFF1F2229) else Color.White,
+                modifier = Modifier.fillMaxWidth(0.94f).heightIn(max = 620.dp)
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Заготовки промпта",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = {
+                            showPresetsDialog = false
+                            editingPreset = PromptPreset(
+                                id = "custom_${System.currentTimeMillis()}",
+                                name = "Моя заготовка",
+                                emoji = "⭐",
+                                prompt = "",
+                                isBuiltIn = false
+                            )
+                        }) { Text("+ Своя", color = DeepSeekBlue, fontWeight = FontWeight.SemiBold) }
+                        Text(
+                            "✕",
+                            fontSize = 18.sp,
+                            modifier = Modifier.clickable { showPresetsDialog = false }.padding(4.dp)
+                        )
+                    }
+                    Text(
+                        "Действует для этого чата · Дообучается по ходу работы",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                        presets.forEachIndexed { idx, p ->
+                            val selected = p.id == activePresetId
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (selected) DeepSeekBlue.copy(alpha = 0.12f) else Color.Transparent)
+                                    .clickable {
+                                        setChatPreset(p.id)
+                                        showPresetsDialog = false
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(p.emoji, fontSize = 20.sp, modifier = Modifier.width(30.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            p.name,
+                                            fontSize = 15.sp,
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                            color = if (selected) DeepSeekBlue else MaterialTheme.colorScheme.onBackground
+                                        )
+                                        if (p.learnedSkill.isNotBlank()) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("🧠", fontSize = 12.sp)
+                                        }
+                                    }
+                                    val preview = p.prompt.ifBlank { "Чистые ответы без кода и Termux" }
+                                    Text(
+                                        preview,
+                                        fontSize = 12.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (selected) {
+                                    Text("✓", color = DeepSeekBlue, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp))
+                                }
+                                Text(
+                                    "✏️",
+                                    fontSize = 15.sp,
+                                    modifier = Modifier
+                                        .clickable {
+                                            showPresetsDialog = false
+                                            editingPreset = p
+                                        }
+                                        .padding(6.dp)
+                                )
+                            }
+                            if (idx < presets.lastIndex) HorizontalDivider(color = dividerCol)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Create / Edit Preset Dialog
+    editingPreset?.let { ep ->
+        var eEmoji by remember(ep.id) { mutableStateOf(ep.emoji) }
+        var eName by remember(ep.id) { mutableStateOf(ep.name) }
+        var ePrompt by remember(ep.id) { mutableStateOf(ep.prompt) }
+        var eSkill by remember(ep.id) { mutableStateOf(ep.learnedSkill) }
+        val isExisting = presets.any { it.id == ep.id }
+        Dialog(
+            onDismissRequest = { editingPreset = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (isDark) Color(0xFF1F2229) else Color.White,
+                modifier = Modifier.fillMaxWidth(0.94f).heightIn(max = 640.dp)
+            ) {
+                Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
+                    Text(
+                        if (isExisting) "Настроить заготовку" else "Новая заготовка",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = eEmoji,
+                            onValueChange = { eEmoji = it.take(4) },
+                            label = { Text("Значок") },
+                            singleLine = true,
+                            modifier = Modifier.width(86.dp)
+                        )
+                        OutlinedTextField(
+                            value = eName,
+                            onValueChange = { eName = it },
+                            label = { Text("Название") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = ePrompt,
+                        onValueChange = { ePrompt = it },
+                        label = { Text("Базовый промпт") },
+                        minLines = 4,
+                        maxLines = 8,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = eSkill,
+                        onValueChange = { eSkill = it },
+                        label = { Text("Накопленный скилл (правила)") },
+                        minLines = 2,
+                        maxLines = 6,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (ep.isBuiltIn) {
+                            TextButton(onClick = {
+                                val def = PresetStore.defaults().firstOrNull { it.id == ep.id }
+                                if (def != null) {
+                                    eEmoji = def.emoji
+                                    eName = def.name
+                                    ePrompt = def.prompt
+                                    eSkill = ""
+                                }
+                            }) { Text("Сбросить") }
+                        } else if (isExisting) {
+                            TextButton(onClick = {
+                                val list = presets.filterNot { it.id == ep.id }
+                                PresetStore.save(ctx, list)
+                                presets = PresetStore.load(ctx)
+                                if (activePresetId == ep.id) setChatPreset("default")
+                                editingPreset = null
+                            }) { Text("Удалить", color = Color(0xFFE53935)) }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { editingPreset = null }) { Text("Отмена") }
+                        Button(
+                            onClick = {
+                                val list = presets.toMutableList()
+                                val updated = ep.copy(
+                                    emoji = eEmoji.ifBlank { "⭐" },
+                                    name = eName.ifBlank { "Заготовка" },
+                                    prompt = ePrompt,
+                                    learnedSkill = eSkill
+                                )
+                                val i = list.indexOfFirst { it.id == ep.id }
+                                if (i >= 0) list[i] = updated else list.add(updated)
+                                PresetStore.save(ctx, list)
+                                presets = PresetStore.load(ctx)
+                                setChatPreset(updated.id)
+                                editingPreset = null
+                            },
+                            shape = RoundedCornerShape(10.dp)
+                        ) { Text("Сохранить") }
+                    }
+                }
+            }
+        }
+    }
+
+    // Add selected/copied message rule to preset
+    addSkillDraft?.let { initial ->
+        var ruleText by remember(initial) { mutableStateOf(initial) }
+        var targetId by remember(initial) {
+            mutableStateOf(if (activePresetId == "default") "termux" else activePresetId)
+        }
+        Dialog(onDismissRequest = { addSkillDraft = null }) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (isDark) Color(0xFF1F2229) else Color.White,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Добавить правило в заготовку", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        presets.filter { it.id != "default" }.forEach { p ->
+                            ModePill(
+                                label = "${p.emoji} ${p.name}",
+                                active = targetId == p.id,
+                                isDark = isDark,
+                                onClick = { targetId = p.id }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = ruleText,
+                        onValueChange = { ruleText = it },
+                        label = { Text("Текст правила") },
+                        minLines = 3,
+                        maxLines = 6,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { addSkillDraft = null }) { Text("Отмена") }
+                        Button(onClick = {
+                            PresetStore.appendSkill(ctx, targetId, ruleText)
+                            presets = PresetStore.load(ctx)
+                            Toast.makeText(ctx, "Добавлено в заготовку", Toast.LENGTH_SHORT).show()
+                            addSkillDraft = null
+                        }) { Text("Сохранить") }
+                    }
                 }
             }
         }

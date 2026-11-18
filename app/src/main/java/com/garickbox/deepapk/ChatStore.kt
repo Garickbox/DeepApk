@@ -24,7 +24,8 @@ data class ChatSession(
     val id: String,
     val title: String,
     val updatedAt: Long,
-    val messages: List<Message>
+    val messages: List<Message>,
+    val presetId: String = "default"
 )
 
 object ChatStore {
@@ -89,7 +90,8 @@ object ChatStore {
                         id = sObj.optString("id").ifBlank { nextMsgId().toString() },
                         title = sObj.optString("title", "Новый чат").ifBlank { "Новый чат" },
                         updatedAt = sObj.optLong("updatedAt", 0L),
-                        messages = msgs
+                        messages = msgs,
+                        presetId = sObj.optString("presetId", "default").ifBlank { "default" }
                     )
                 )
             }
@@ -124,6 +126,7 @@ object ChatStore {
                     .put("id", s.id)
                     .put("title", s.title)
                     .put("updatedAt", s.updatedAt)
+                    .put("presetId", s.presetId)
                     .put("messages", mArr)
             )
         }
