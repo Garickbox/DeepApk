@@ -344,6 +344,45 @@ fun SettingsScreen(
             }
         )
     }
+    if (showThemeDialog) {
+        ChoiceDialog(
+            title = "Внешний вид",
+            items = listOf(
+                "system" to "Система",
+                "dark" to "Тёмная",
+                "light" to "Светлая"
+            ),
+            selected = draft.themeMode,
+            onSelect = { mode ->
+                saveNow(draft.copy(themeMode = mode))
+                onThemeChange(mode)
+                showThemeDialog = false
+            },
+            onDismiss = { showThemeDialog = false }
+        )
+    }
+    if (showFontDialog) {
+        ChoiceDialog(
+            title = "Размер шрифта",
+            items = listOf(
+                "12" to "Очень мелкий (12)",
+                "13" to "Мелкий (13)",
+                "15" to "Обычный (15)",
+                "17" to "Крупный (17)",
+                "19" to "Очень крупный (19)",
+                "21" to "Гигантский (21)"
+            ),
+            selected = draft.fontSizeSp.toString(),
+            onSelect = { szStr ->
+                val sz = szStr.toIntOrNull()
+                if (sz != null) {
+                    saveNow(draft.copy(fontSizeSp = sz))
+                    showFontDialog = false
+                }
+            },
+            onDismiss = { showFontDialog = false }
+        )
+    }
 }
 
 @Composable
