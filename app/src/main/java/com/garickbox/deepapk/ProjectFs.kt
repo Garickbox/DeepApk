@@ -282,6 +282,15 @@ object ProjectFs {
         return hits.joinToString("\n") + suffix
     }
 
+    fun readRawContent(ctx: Context, relPath: String): String? {
+        val treeUri = getTreeUri(ctx) ?: return null
+        val entry = findDoc(ctx, treeUri, relPath) ?: return null
+        if (entry.isDir) return null
+        if (!isTextFile(entry.name, entry.size)) return null
+        val bytes = readBytesDoc(ctx, treeUri, entry.docId) ?: return null
+        return String(bytes, Charsets.UTF_8).replace("\r\n", "\n")
+    }
+
     fun readFileLines(ctx: Context, relPath: String, start: Int = 1, end: Int = 150): String {
         val treeUri = getTreeUri(ctx) ?: return "[SAF: папка проекта не подключена]"
         val entry = findDoc(ctx, treeUri, relPath) ?: return "[SAF: файл не найден: $relPath]"
