@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.util.Log
+import kotlin.coroutines.cancellation.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -128,8 +129,12 @@ object ProjectFs {
                     out.add(DocEntry(id, name, mime == DocumentsContract.Document.MIME_TYPE_DIR, size))
                 }
             }
-        } catch (e: Exception) {
-            Log.w("DeepApk", "listChildren($parentDocId) failed: ${e.javaClass.simpleName}: ${e.message}")
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (se: SecurityException) {
+            Log.e("DeepApk", "listChildren($parentDocId) SecurityException", se)
+        } catch (te: Throwable) {
+            Log.e("DeepApk", "listChildren($parentDocId) failed: ${te.javaClass.simpleName}: ${te.message}", te)
         }
         return out.sortedWith(compareBy<DocEntry> { !it.isDir }.thenBy { it.name.lowercase() })
     }
@@ -185,8 +190,13 @@ object ProjectFs {
         val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
         return try {
             ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-        } catch (e: Exception) {
-            Log.w("DeepApk", "readBytesDoc($docId) failed: ${e.javaClass.simpleName}: ${e.message}")
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (se: SecurityException) {
+            Log.e("DeepApk", "readBytesDoc($docId) SecurityException", se)
+            null
+        } catch (te: Throwable) {
+            Log.e("DeepApk", "readBytesDoc($docId) failed: ${te.javaClass.simpleName}: ${te.message}", te)
             null
         }
     }
@@ -296,8 +306,12 @@ object ProjectFs {
         val entry = findDoc(ctx, treeUri, relPath) ?: return "[SAF: файл не найден: $relPath]"
         if (entry.isDir) return listTree(ctx, relPath)
         if (!isTextFile(entry.name, entry.size)) return "[SAF: бинарный или слишком большой файл: $relPath (${entry.size} B)]"
-        val bytes = try { readBytesDoc(ctx, treeUri, entry.docId) } catch (e: Exception) {
-            Log.w("DeepApk", "readFileLines($relPath) failed: ${e.message}"); null
+        val bytes = try { readBytesDoc(ctx, treeUri, entry.docId) } catch (ce: CancellationException) {
+            throw ce
+        } catch (se: SecurityException) {
+            Log.e("DeepApk", "readFileLines($relPath) SecurityException", se); null
+        } catch (te: Throwable) {
+            Log.e("DeepApk", "readFileLines($relPath) failed: ${te.javaClass.simpleName}: ${te.message}", te); null
         } ?: return "[SAF: ошибка чтения $relPath]"
         val lines = String(bytes, Charsets.UTF_8).replace("\r\n", "\n").split('\n')
         if (lines.isEmpty()) return "[Пустой файл: $relPath]"
