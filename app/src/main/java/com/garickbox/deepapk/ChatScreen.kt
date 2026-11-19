@@ -202,6 +202,7 @@ fun ChatScreen(
     }
 
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    var showAttachMenu by remember { mutableStateOf(false) }
 
     val photoOcrPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -1476,42 +1477,39 @@ fun ChatScreen(
                         )
                         Spacer(Modifier.weight(1f))
 
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
-                                .clickable { launchPhotoOcr() },
-                            contentAlignment = Alignment.Center
-                        ) { Text("\uD83D\uDCF7", fontSize = 14.sp) }
-
-                        Spacer(Modifier.width(6.dp))
-
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
-                                .clickable { launchCameraOcr() },
-                            contentAlignment = Alignment.Center
-                        ) { Text("\uD83D\uDCF8", fontSize = 14.sp) }
-
-                        Spacer(Modifier.width(6.dp))
-
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
-                                .clickable { filePicker.launch(arrayOf("*/*")) },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                "+",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onBackground
-                            )
+                        Box {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
+                                    .clickable { showAttachMenu = true },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "+",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showAttachMenu,
+                                onDismissRequest = { showAttachMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("\uD83D\uDCF7  Фото (OCR)") },
+                                    onClick = { showAttachMenu = false; launchPhotoOcr() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("\uD83D\uDCF8  Камера (OCR)") },
+                                    onClick = { showAttachMenu = false; launchCameraOcr() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("\uD83D\uDCCE  Прикрепить файл") },
+                                    onClick = { showAttachMenu = false; filePicker.launch(arrayOf("*/*")) }
+                                )
+                            }
                         }
 
                         Spacer(Modifier.width(10.dp))
