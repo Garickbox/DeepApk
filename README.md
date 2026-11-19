@@ -46,7 +46,6 @@ DeepSeek / Gemini · SAF-доступ к коду проекта · Termux-мо�
 
 - **▶ Termux** на любом code-блоке — запуск bash/python через RUN_COMMAND
 - **Inline fallback** — если MediaStore.insert не сработал, код летит в RUN_COMMAND -c напрямую
-- Скрипты: ~/deep_build.sh, ~/aile_dl.sh, ~/deep_install.sh, ~/deep_watch.sh
 
 ### 📄 ГОСТ .docx
 
@@ -71,28 +70,31 @@ DeepSeek / Gemini · SAF-доступ к коду проекта · Termux-мо�
 
 ## 🚀 Установка
 
-### Готовый APK
+### Готовый APK (рекомендуется)
 
 1. Открой [Releases](https://github.com/Garickbox/DeepApk/releases)
 2. Скачай последний DeepApk-build-N.apk
 3. Разреши установку из неизвестных источников → установи
 
-### Сборка на телефоне (Termux)
+### Сборка из исходников
 
-Требуется Termux (F-Droid), Termux:API, Termux:Widget, ~4 ГБ RAM, ~3 ГБ свободного места.
+Требуется JDK 17, Android SDK (build-tools 34), ~4 ГБ RAM.
 
-- `pkg update && pkg upgrade -y`
-- `pkg install -y openjdk-17 gradle git aapt2 android-tools`
-- `git clone https://github.com/Garickbox/DeepApk.git ~/DeepApk`
-- `cd ~/DeepApk && bash ~/deep_build.sh`
-- `bash ~/aile_dl.sh` — ожидание CI + скачивание APK в ~/DeepApk/apk/
-- `bash ~/deep_install.sh` — установка через ADB
+Команды:
+
+- `git clone https://github.com/Garickbox/DeepApk.git`
+- `cd DeepApk`
+- `./gradlew assembleDebug`
+
+Готовый APK появится в `app/build/outputs/apk/debug/app-debug.apk`.
+
+Альтернатива — **CI собирает APK автоматически** при каждом push в main (см. .github/workflows/build.yml). Артефакт доступен во вкладке Actions.
 
 ### Первый запуск
 
 1. Задай **API-ключ** DeepSeek или Gemini в Настройках
 2. Выбери модель (чип DS / ✦ Gemini в шапке)
-3. Подключи **SAF-папку проекта** — чип в TopBar → выбери DeepApk
+3. Подключи **SAF-папку проекта** — чип в TopBar → выбери папку с репозиторием
 4. Готово: модель видит структуру и может предлагать правки
 
 ## 🏗️ Архитектура
@@ -118,19 +120,19 @@ DeepSeek / Gemini · SAF-доступ к коду проекта · Termux-мо�
 
 **Стек:** Kotlin · Jetpack Compose (Material 3) · Coroutines · OkHttp 4.12 · Storage Access Framework · OOXML.
 
-## 🧪 Скрипты Termux
+## 🧪 Скрипты автора (локальные, вне репозитория)
 
-Все — в $HOME, лежат вне репозитория:
+**Важно:** эти скрипты не входят в репозиторий — это личная обвязка автора в его Termux. У вас их не будет, а `bash ~/deep_build.sh` упадёт с `No such file`. Если нужны — пишите свои аналоги, в проекте их нет.
 
-- **deep_build.sh** — deepapk_guard.py + ./gradlew compileDebugKotlin + aapt2 из Termux
-- **deepapk_guard.py** — проверка что все Log.w / try-catch на месте перед сборкой
-- **deep_go.sh "msg"** — проверка сборки + git add app/src app/build.gradle.kts .github + push + watch
-- **aile_dl.sh** — ожидание CI + скачивание APK в ~/DeepApk/apk/
-- **deep_watch.sh** — ожидание CI (wget, чтобы РКН не резал GitHub > 8 КБ)
-- **deep_install.sh** — установка APK через ADB
-- **deep_err.sh** — дамп ошибок сборки/CI в ~/log.txt
+- **~/deep_build.sh** — авторская сборка (deepapk_guard.py + gradle + aapt2). Эквивалент: `./gradlew assembleDebug`
+- **~/deepapk_guard.py** — проверка Log.w / try-catch перед сборкой
+- **~/deep_go.sh "msg"** — сборка + commit + push + CI-watch
+- **~/aile_dl.sh** — ожидание CI + скачивание APK в apk/
+- **~/deep_watch.sh** — ожидание CI (wget — обход РКН >8 КБ)
+- **~/deep_install.sh** — установка APK через ADB
+- **~/deep_err.sh** — дамп ошибок CI в log.txt
 
-**Правило:** любая временная папка — только ~/deep_tmp/, никакой /tmp (в Termux он не работает).
+Для публичного использования — только `./gradlew assembleDebug` и вкладка Actions.
 
 ## 🎯 Roadmap
 
@@ -141,8 +143,8 @@ DeepSeek / Gemini · SAF-доступ к коду проекта · Termux-мо�
 - [x] .deepapk скиллы (импорт / экспорт / auto-learn)
 - [x] ГОСТ .docx
 - [ ] P6 — разгрузка ChatScreen.kt (фазы 2–3)
-- [ ] Multi-model — Claude, OpenAI (провайдер-абстракция готова)
-- [ ] RAG-память — эмбеддинги по проекту, поиск по коду локально
+- [ ] Multi-model — Claude, OpenAI
+- [ ] RAG-память — эмбеддинги по проекту
 - [ ] Smoke-тесты для ProjectFs
 - [ ] Плагины — .deepapk с исполняемым кодом
 - [ ] WebDAV/SSH — синк проекта вне SAF
