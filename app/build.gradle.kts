@@ -5,6 +5,7 @@ android {
     defaultConfig {
         applicationId = "com.garickbox.deepapk"
         minSdk = 26; targetSdk = 34
+        ndk { abiFilters += listOf("arm64-v8a") }
         versionCode = ((System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt())
         versionName = "1.0.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
     }
