@@ -184,7 +184,7 @@ fun ChatScreen(
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val mime = ctx.contentResolver.getType(uri).orEmpty()
-            if (mime.startsWith("image/")) {
+            if (mime.startsWith("image/") || mime.startsWith("application/pdf")) {
                 scope.launch {
                     val att = ocrImage(ctx, uri)
                     if (att != null) attachments.add(att)
@@ -204,7 +204,7 @@ fun ChatScreen(
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
     var showAttachMenu by remember { mutableStateOf(false) }
 
-    val photoOcrPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    val photoOcrPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             scope.launch {
                 val att = ocrImage(ctx, uri)
@@ -227,7 +227,7 @@ fun ChatScreen(
 
     fun launchPhotoOcr() {
         try {
-            photoOcrPicker.launch("image/*")
+            photoOcrPicker.launch(arrayOf("image/*", "application/pdf"))
         } catch (e: Exception) {
             Toast.makeText(ctx, "Галерея недоступна: " + e.message, Toast.LENGTH_SHORT).show()
         }
@@ -1498,7 +1498,7 @@ fun ChatScreen(
                                 onDismissRequest = { showAttachMenu = false }
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("\uD83D\uDCF7  Фото (OCR)") },
+                                    text = { Text("\uD83D\uDCF7  Фото / PDF (OCR)") },
                                     onClick = { showAttachMenu = false; launchPhotoOcr() }
                                 )
                                 DropdownMenuItem(

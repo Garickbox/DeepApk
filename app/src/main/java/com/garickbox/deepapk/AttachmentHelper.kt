@@ -15,6 +15,9 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.googlecode.tesseract.android.TessBaseAPI
 import android.graphics.BitmapFactory
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
+import java.io.FileInputStream
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -124,37 +127,113 @@ private suspend fun runOcrOn(recognizer: TextRecognizer, image: InputImage): Tex
     }
 }
 
+private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 20): String? =
+    withContext(Dispatchers.IO) {
+        var renderer: PdfRenderer? = null
+        var pfd2: ParcelFileDescriptor? = null
+        var tess: TessBaseAPI? = null
+        var tmp: File? = null
+        try {
+            val root = ensureTessdata(ctx)
+            tess = TessBaseAPI()
+            if (!tess.init(root.absolutePath, "rus+eng")) {
+                Log.e("OCR", "ocrPdf: tess.init failed")
+                return@withContext null
+            }
+            val tmpFile = File(ctx.cacheDir, "ocr_pdf_" + System.currentTimeMillis() + ".pdf")
+            tmp = tmpFile
+            ctx.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).use { fis ->
+                    tmpFile.outputStream().use { out -> fis.copyTo(out) }
+                }
+            } ?: return@withContext null
+
+            val p = ParcelFileDescriptor.open(tmpFile, ParcelFileDescriptor.MODE_READ_ONLY)
+            pfd2 = p
+            renderer = PdfRenderer(p)
+            val total = renderer.pageCount
+            val pages = total.coerceAtMost(maxPages)
+            val sb = StringBuilder()
+            val scale = 2.0f
+            for (i in 0 until pages) {
+                val page = renderer.openPage(i)
+                try {
+                    val w = (page.width * scale).toInt().coerceAtLeast(1)
+                    val h = (page.height * scale).toInt().coerceAtLeast(1)
+                    val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                    bmp.eraseColor(android.graphics.Color.WHITE)
+                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    tess.setImage(bmp)
+                    val pageText = tess.getUTF8Text() ?: ""
+                    bmp.recycle()
+                    sb.append("=== Страница ").append(i + 1).append(" / ").append(total).append(" ===\n")
+                    if (pageText.isBlank()) sb.append("[нет текста]\n")
+                    else sb.append(pageText.trim()).append('\n')
+                    sb.append('\n')
+                } finally {
+                    try { page.close() } catch (_: Throwable) {}
+                }
+            }
+            if (total > maxPages) {
+                sb.append("[... PDF ").append(total).append(" стр., обработано первых ").append(maxPages).append("]")
+            }
+            val result = sb.toString().trim()
+            if (result.isBlank()) null else result
+        } catch (e: Throwable) {
+            Log.e("OCR", "ocrPdf: " + e.message, e)
+            null
+        } finally {
+            try { tess?.end() } catch (_: Throwable) {}
+            try { renderer?.close() } catch (_: Throwable) {}
+            try { pfd2?.close() } catch (_: Throwable) {}
+            try { tmp?.delete() } catch (_: Throwable) {}
+        }
+    }
+
 suspend fun ocrImage(ctx: Context, uri: Uri): AttachedFile? {
     return try {
         var finalText: String? = null
         var label = ""
+        var emoji = "\uD83D\uDCF7"
 
-        val tessText = tesseractOcr(ctx, uri)
-        if (!tessText.isNullOrBlank() && tessText.length > 3) {
-            finalText = tessText.trim()
-            label = tessText.count { it == '\n' }.plus(1).toString() + " строк (tess)"
+        val mime = ctx.contentResolver.getType(uri).orEmpty()
+        val isPdf = mime.startsWith("application/pdf")
+
+        if (isPdf) {
+            emoji = "\uD83D\uDCC4"
+            val pdfText = ocrPdf(ctx, uri)
+            if (!pdfText.isNullOrBlank()) {
+                finalText = pdfText.trim()
+                label = "PDF OCR"
+            }
         } else {
-            val image = InputImage.fromFilePath(ctx, uri)
-            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-            try {
-                val pick = runOcrOn(recognizer, image)
-                if (pick != null && pick.text.isNotBlank()) {
-                    val sb = StringBuilder()
-                    for (block in pick.textBlocks) {
-                        for (line in block.lines) sb.append(line.text).append('\n')
-                        sb.append('\n')
+            val tessText = tesseractOcr(ctx, uri)
+            if (!tessText.isNullOrBlank() && tessText.length > 3) {
+                finalText = tessText.trim()
+                label = tessText.count { it == '\n' }.plus(1).toString() + " строк (tess)"
+            } else {
+                val image = InputImage.fromFilePath(ctx, uri)
+                val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                try {
+                    val pick = runOcrOn(recognizer, image)
+                    if (pick != null && pick.text.isNotBlank()) {
+                        val sb = StringBuilder()
+                        for (block in pick.textBlocks) {
+                            for (line in block.lines) sb.append(line.text).append('\n')
+                            sb.append('\n')
+                        }
+                        finalText = sb.toString().trim()
+                        label = pick.textBlocks.size.toString() + " блоков (mlkit)"
                     }
-                    finalText = sb.toString().trim()
-                    label = pick.textBlocks.size.toString() + " блоков (mlkit)"
+                } finally {
+                    recognizer.close()
                 }
-            } finally {
-                recognizer.close()
             }
         }
 
         if (finalText.isNullOrBlank()) return null
 
-        var name = "ocr_photo.jpg"
+        var name = if (isPdf) "ocr_doc.pdf" else "ocr_photo.jpg"
         ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
             if (c.moveToFirst()) {
                 val nIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -163,7 +242,7 @@ suspend fun ocrImage(ctx: Context, uri: Uri): AttachedFile? {
         }
 
         val trimmed = if (finalText.length > 50000) finalText.take(50000) + "\n... [обрезано]" else finalText
-        AttachedFile(name = "\uD83D\uDCF7 " + name, sizeLabel = label, content = trimmed)
+        AttachedFile(name = emoji + " " + name, sizeLabel = label, content = trimmed)
     } catch (e: Throwable) {
         Log.e("OCR", "ocrImage: " + e.message, e)
         null
