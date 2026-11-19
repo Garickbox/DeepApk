@@ -42,15 +42,9 @@ class ProjectFsParserTest {
 
     @Test
     fun fs_patch_multiline_trimmed_edges() {
-        val t = "\u003Cfs_patch path=\"m.kt\">\u003Cold>\
-line1\
-line2\
-\u003C/old>\u003Cnew>\
-x\
-\u003C/new>\u003C/fs_patch>"
+        val t = "\u003Cfs_patch path=\"m.kt\">\u003Cold>\nline1\nline2\n\u003C/old>\u003Cnew>\nx\n\u003C/new>\u003C/fs_patch>"
         val p = ProjectFs.extractWriteOps(t)[0] as FsWriteOp.Patch
-        assertEquals("line1\
-line2", p.replacements[0].first)
+        assertEquals("line1\nline2", p.replacements[0].first)
         assertEquals("x", p.replacements[0].second)
     }
 
@@ -111,11 +105,7 @@ line2", p.replacements[0].first)
 
     @Test
     fun fs_write_inner_spaces_kept() {
-        val t = "\u003Cfs_write path=\"x.kt\">\
-\
-  content  \
-\
-\u003C/fs_write>"
+        val t = "\u003Cfs_write path=\"x.kt\">\n\n  content  \n\n\u003C/fs_write>"
         val w = ProjectFs.extractWriteOps(t)[0] as FsWriteOp.Write
         assertEquals("  content  ", w.content)
     }
