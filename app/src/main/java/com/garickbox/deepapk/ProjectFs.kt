@@ -371,8 +371,9 @@ object ProjectFs {
             .replace(Regex("""<fs_read[^>]*?(?:/>|>[\s\S]*?</fs_read>)""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""\n{3,}"""), "\n\n")
             .trim()
-        val note = "> 🔍 Запрос к проекту: $summary"
-        cleaned = if (cleaned.isBlank()) note else "$cleaned\n\n$note"
+        // Авто-заметка только в chipLabel payload'а (executeReadOps),
+        // чтобы модель не копировала "> 🔍 Запрос к проекту:" из своего же контекста.
+        if (cleaned.isBlank() && summary.isNotBlank()) cleaned = "— прочитано: $summary"
         return cleaned
     }
 
@@ -399,7 +400,7 @@ object ProjectFs {
                 }
             }
         }
-        val chipLabel = "📂 SAF: " + labels.joinToString(" · ").take(64)
+        val chipLabel = "Прочитан: " + labels.joinToString(" · ").take(64)
         val rawText = body.toString().trim()
         val fence = if (rawText.contains("```")) "````" else "```"
         val payload = "[Файл: $chipLabel]\n${fence}text\n$rawText\n$fence"
