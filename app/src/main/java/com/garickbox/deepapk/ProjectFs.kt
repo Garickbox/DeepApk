@@ -98,7 +98,7 @@ object ProjectFs {
             "Если готов предложить точечную правку прямо в SAF — используй <fs_patch path=\"...\"><old>точный фрагмент</old><new>новый код</new></fs_patch> или <fs_write path=\"...\">содержимое</fs_write> (DeepApk сначала сделает бэкап и даст кнопку подтверждения пользователю)."
     }
 
-    private fun sanitizeRelPath(raw: String): String? {
+    internal fun sanitizeRelPath(raw: String): String? {
         val clean = raw.trim().replace('\\', '/').trimStart('/')
         if (clean.isBlank()) return ""
         val segs = clean.split('/').filter { it.isNotBlank() && it != "." }
@@ -221,7 +221,7 @@ object ProjectFs {
         return true
     }
 
-    private fun isTextFile(name: String, size: Long): Boolean {
+    internal fun isTextFile(name: String, size: Long): Boolean {
         if (size > 350_000L) return false
         val ext = name.substringAfterLast('.', "").lowercase()
         return ext !in BINARY_EXTS
@@ -332,7 +332,7 @@ object ProjectFs {
         return sb.toString().trimEnd()
     }
 
-    private fun parseAttrs(attrStr: String): Map<String, String> {
+    internal fun parseAttrs(attrStr: String): Map<String, String> {
         val map = mutableMapOf<String, String>()
         val rx = Regex("""(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
         rx.findAll(attrStr).forEach { m ->
@@ -446,7 +446,7 @@ object ProjectFs {
         } catch (_: Exception) { emptyList() }
     }
 
-    private fun countOccurrences(haystack: String, needle: String): Int {
+    internal fun countOccurrences(haystack: String, needle: String): Int {
         if (needle.isEmpty()) return 0
         var count = 0
         var idx = 0
