@@ -94,7 +94,7 @@ private suspend fun tesseractOcr(ctx: Context, uri: Uri): String? = withContext(
     var bmp: android.graphics.Bitmap? = null
     try {
         val root = ensureTessdata(ctx)
-        val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
+        val opts = BitmapFactory.Options().apply { inSampleSize = 1 }
         bmp = ctx.contentResolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, opts)
         } ?: return@withContext null
@@ -105,6 +105,7 @@ private suspend fun tesseractOcr(ctx: Context, uri: Uri): String? = withContext(
         }
         tess.setImage(bmp)
         val text = tess.getUTF8Text() ?: ""
+        Log.d("OCR", "tess5 dim=${bmp.width}x${bmp.height} len=${text.length} conf=${try { tess.meanConfidence() } catch (_: Throwable) { -1 }}")
         if (text.isBlank()) null else text
     } catch (e: Throwable) {
         Log.e("OCR", "tesseract: " + e.message, e)
@@ -154,7 +155,7 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 20): String? 
             val total = renderer.pageCount
             val pages = total.coerceAtMost(maxPages)
             val sb = StringBuilder()
-            val scale = 2.0f
+            val scale = 3.0f
             for (i in 0 until pages) {
                 val page = renderer.openPage(i)
                 try {
