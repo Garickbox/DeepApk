@@ -486,9 +486,7 @@ fun ChatScreen(
                             withContext(Dispatchers.IO) { DocxEngine.saveHtmlSilently(ctx, t, h) }
                         }
                     }
-                    // fs_parse test marker — safe to keep
                     val writeOps = ProjectFs.extractWriteOps(last.content)
-                    android.util.Log.w("DeepApk", "fs_parse: len=" + last.content.length + " hasFp=" + last.content.contains("<fs_patch") + " hasFw=" + last.content.contains("<fs_write") + " ops=" + writeOps.size + " ready=" + ProjectFs.isReady(ctx) + " tail=" + last.content.takeLast(80).replace("\n", "\\n"))
                     if (ProjectFs.isReady(ctx) && writeOps.isNotEmpty()) pendingFsEdits = writeOps
                     if (!wasCancelled && !cancelRequested && continueTargetIdx == null && projectAutoRead && ProjectFs.isReady(ctx) && toolDepth < ChatSafController.SAF_MAX_TOOL_DEPTH) {
                         val readOps = ProjectFs.extractReadOps(last.content)
