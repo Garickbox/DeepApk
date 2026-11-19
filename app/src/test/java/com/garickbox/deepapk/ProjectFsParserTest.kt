@@ -179,20 +179,22 @@ class ProjectFsParserTest {
     // ================================================================
 
     @Test
-    fun strip_removes_all_tags_keeps_text_and_summary() {
+    fun strip_removes_all_tags_keeps_text() {
         val t = "Hello \u003Cfs_tree/> world \u003Cfs_grep pattern=\"x\" path=\"y\"/> \u003Cfs_read path=\"z.kt\"/>"
         val out = ProjectFs.stripReadTags(t, "test summary")
-        assertTrue("Hello", out.contains("Hello"))
-        assertTrue("world", out.contains("world"))
+        assertEquals("Hello  world", out)
         assertFalse(out.contains("\u003Cfs_"))
         assertFalse(out.contains("fs_tree"))
-        assertTrue(out.endsWith("> \uD83D\uDD0D Запрос к проекту: test summary"))
+        // новая логика: заметка НЕ добавляется если остался текст,
+        // чтобы модель не копировала маркер из своего же контекста
+        assertFalse(out.contains("Запрос к проекту"))
+        assertFalse(out.contains("прочитано"))
     }
 
     @Test
-    fun strip_only_tags_returns_summary_alone() {
+    fun strip_only_tags_returns_marker_alone() {
         val t = "\u003Cfs_tree/>\u003Cfs_tree path=\"a\"/>\u003Cfs_grep pattern=\"x\" path=\"y\"/>"
         val out = ProjectFs.stripReadTags(t, "tree")
-        assertEquals("> \uD83D\uDD0D Запрос к проекту: tree", out)
+        assertEquals("— прочитано: tree", out)
     }
 }
