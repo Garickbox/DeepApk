@@ -390,29 +390,32 @@ object ProjectFs {
         return map
     }
 
-    fun extractReadOps(text: String): List<FsReadOp> {
+    fun extractReadOps(rawText: String): List<FsReadOp> {
+        val text = normalizeDsml(rawText)
         val ops = mutableListOf<Pair<Int, FsReadOp>>()
         Regex("""<fs_tree([^>]*?)(?:/>|>[\s\S]*?</fs_tree>)""", RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
             val attrs = parseAttrs(m.groupValues[1])
-            ops.add(m.range.first to FsReadOp.Tree(attrs["path"].orEmpty()))
+            val _p = attrs["path"].orEmpty()
+            if (!isPlaceholderPath(_p)) ops.add(m.range.first to FsReadOp.Tree(_p))
         }
         Regex("""<fs_grep([^>]*?)(?:/>|>[\s\S]*?</fs_grep>)""", RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
             val attrs = parseAttrs(m.groupValues[1])
             val pat = attrs["pattern"].orEmpty()
-            if (pat.isNotBlank()) ops.add(m.range.first to FsReadOp.Grep(pat, attrs["path"].orEmpty()))
+            val _gp = attrs["path"].orEmpty()
+            if (pat.isNotBlank() && !isPlaceholderPath(_gp)) ops.add(m.range.first to FsReadOp.Grep(pat, _gp))
         }
         Regex("""<fs_read([^>]*?)(?:/>|>[\s\S]*?</fs_read>)""", RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
             val attrs = parseAttrs(m.groupValues[1])
             val p = attrs["path"].orEmpty()
             val s = attrs["start"]?.toIntOrNull() ?: 1
             val e = attrs["end"]?.toIntOrNull() ?: (s + 149)
-            if (p.isNotBlank()) ops.add(m.range.first to FsReadOp.Read(p, s, e))
+            if (p.isNotBlank() && !isPlaceholderPath(p)) ops.add(m.range.first to FsReadOp.Read(p, s, e))
         }
         return ops.sortedBy { it.first }.map { it.second }.take(4)
     }
 
-    fun stripReadTags(text: String, summary: String): String {
-        var cleaned = text
+    fun stripReadTags(rawText: String, summary: String): String {
+        var cleaned = normalizeDsml(rawText)
             .replace(Regex("""<fs_tree[^>]*?(?:/>|>[\s\S]*?</fs_tree>)""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""<fs_grep[^>]*?(?:/>|>[\s\S]*?</fs_grep>)""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""<fs_read[^>]*?(?:/>|>[\s\S]*?</fs_read>)""", RegexOption.IGNORE_CASE), "")
@@ -454,11 +457,12 @@ object ProjectFs {
         return chipLabel to payload
     }
 
-    fun extractWriteOps(text: String): List<FsWriteOp> {
+    fun extractWriteOps(rawText: String): List<FsWriteOp> {
+        val text = normalizeDsml(rawText)
         val out = mutableListOf<Pair<Int, FsWriteOp>>()
         Regex("""<fs_patch([^>]*)>([\s\S]*?)</fs_patch>""", RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
             val path = parseAttrs(m.groupValues[1])["path"].orEmpty().trim()
-            if (path.isNotBlank()) {
+            if (path.isNotBlank() && !isPlaceholderPath(path)) {
                 val inner = m.groupValues[2]
                 val pairs = Regex("""<old>([\s\S]*?)</old>\s*<new>([\s\S]*?)</new>""").findAll(inner)
                     .map { pm -> pm.groupValues[1].trim('\r', '\n') to pm.groupValues[2].trim('\r', '\n') }
@@ -468,7 +472,7 @@ object ProjectFs {
         }
         Regex("""<fs_write([^>]*)>([\s\S]*?)</fs_write>""", RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
             val path = parseAttrs(m.groupValues[1])["path"].orEmpty().trim()
-            if (path.isNotBlank()) {
+            if (path.isNotBlank() && !isPlaceholderPath(path)) {
                 val body = m.groupValues[2].trim('\r', '\n')
                 out.add(m.range.first to FsWriteOp.Write(path, body))
             }
@@ -644,3 +648,55 @@ object ProjectFs {
         }
     }
 }
+
+// ===== DSML tolerance (DeepSeek tool-call tokens) =====
+internal fun normalizeDsml(input: String): String {
+    if (!input.contains("DSML")) return input
+    val bar = "[\uFF5C|]{2,3}"
+    val invokeRe = Regex(
+        "<\\s*" + bar + "\\s*DSML\\s*" + bar + "\\s*invoke\\s+name=\"(\\w+)\">([\\s\\S]*?)</\\s*" + bar + "\\s*DSML\\s*" + bar + "\\s*invoke>",
+        RegexOption.IGNORE_CASE
+    )
+    val paramRe = Regex(
+        "<\\s*" + bar + "\\s*DSML\\s*" + bar + "\\s*parameter\\s+name=\"(\\w+)\"[^>]*>([\\s\\S]*?)</\\s*" + bar + "\\s*DSML\\s*" + bar + "\\s*parameter>",
+        RegexOption.IGNORE_CASE
+    )
+    return invokeRe.replace(input) { m ->
+        val name = m.groupValues[1].lowercase()
+        val ps = paramRe.findAll(m.groupValues[2]).associate { it.groupValues[1] to it.groupValues[2].trim() }
+        when (name) {
+            "fs_read" -> {
+                val p = ps["path"] ?: return@replace m.value
+                val s = ps["start"] ?: "1"
+                val e = ps["end"] ?: "150"
+                ""
+            }
+            "fs_tree" -> {
+                val p = ps["path"] ?: ""
+                ""
+            }
+            "fs_grep" -> {
+                val p = ps["pattern"] ?: return@replace m.value
+                val pa = ps["path"] ?: ""
+                ""
+            }
+            "fs_patch", "fs_write" -> {
+                val pa = ps["path"] ?: return@replace m.value
+                val body = ps["content"] ?: ps["text"] ?: ps["body"] ?: ""
+                "<" + name + " path=\"$pa\">" + body + "</" + name + ">"
+            }
+            else -> m.value
+        }
+    }
+}
+
+// Blank = валидная (root для tree, весь проект для grep).
+// true — только очевидный мусор: "X", "...", ".", "??".
+internal fun isPlaceholderPath(input: String): Boolean {
+    val s = input.trim()
+    if (s.isEmpty()) return false
+    if (s.length <= 2) return true
+    if (s.all { it == '.' || it == '\u2026' || it == '*' || it == '?' || it == '_' }) return true
+    return false
+}
+
