@@ -13,7 +13,6 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
-import com.google.mlkit.vision.text.cyrillic.CyrillicTextRecognizerOptions
 import com.google.mlkit.vision.text.TextRecognizer
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -78,18 +77,10 @@ private suspend fun runOcrOn(recognizer: TextRecognizer, image: InputImage): Tex
 suspend fun ocrImage(ctx: Context, uri: Uri): AttachedFile? {
     return try {
         val image = InputImage.fromFilePath(ctx, uri)
-        val latin = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        val cyr = TextRecognition.getClient(CyrillicTextRecognizerOptions.Builder().build())
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         try {
-            val a = runOcrOn(latin, image)
-            val b = runOcrOn(cyr, image)
-            val pick: Text? = when {
-                a == null && b == null -> null
-                a == null -> b
-                b == null -> a
-                else -> if (b.text.length > a.text.length) b else a
-            }
-            if (pick == null || pick.text.isBlank()) return null
+            val pick = runOcrOn(recognizer, image) ?: return null
+            if (pick.text.isBlank()) return null
             var name = "ocr_photo.jpg"
             ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
                 if (c.moveToFirst()) {
@@ -107,8 +98,7 @@ suspend fun ocrImage(ctx: Context, uri: Uri): AttachedFile? {
             val label = "" + pick.textBlocks.size + " блоков"
             AttachedFile(name = "\uD83D\uDCF7 " + name, sizeLabel = label, content = finalText)
         } finally {
-            latin.close()
-            cyr.close()
+            recognizer.close()
         }
     } catch (_: Exception) {
         null
