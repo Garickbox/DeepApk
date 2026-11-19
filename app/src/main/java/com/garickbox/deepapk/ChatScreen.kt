@@ -488,45 +488,35 @@ fun ChatScreen(
                     }
                     val writeOps = ProjectFs.extractWriteOps(last.content)
                     if (ProjectFs.isReady(ctx) && writeOps.isNotEmpty()) pendingFsEdits = writeOps
-                    if (!wasCancelled && !cancelRequested && continueTargetIdx == null && projectAutoRead && ProjectFs.isReady(ctx) && toolDepth < 4) {
+                    if (!wasCancelled && !cancelRequested && continueTargetIdx == null && projectAutoRead && ProjectFs.isReady(ctx) && toolDepth < ChatSafController.SAF_MAX_TOOL_DEPTH) {
                         val readOps = ProjectFs.extractReadOps(last.content)
                         if (readOps.isNotEmpty()) {
-                            safStatus = when (val op = readOps.first()) {
-                                is FsReadOp.Tree -> "Читаю дерево ${op.path.ifBlank { "/" }}…"
-                                is FsReadOp.Grep -> "Ищу «${op.pattern.take(20)}»…"
-                                is FsReadOp.Read -> "Читаю ${op.path.substringAfterLast("/")}…"
-                            }
-                            var safErr: String? = null
-                            val res = try {
-                                kotlinx.coroutines.withTimeoutOrNull(180_000L) {
-                                    kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
-                                        ProjectFs.executeReadOps(ctx, readOps)
+                            safStatus = ChatSafController.buildStatusText(readOps.first())
+                            val res = ChatSafController.runSafRead(
+                                ctx = ctx,
+                                ops = readOps,
+                                originalContent = last.content,
+                                timeoutMsg = "> ⏱ SAF-чтение не ответило за 180 с (файл большой или папка недоступна). Нажми «Отправить» ещё раз, чтобы повторить."
+                            )
+                            if (!cancelRequested) {
+                                when (res) {
+                                    is SafReadResult.Success -> {
+                                        safRetryTargetIdx = -1
+                                        safRetryOps = emptyList()
+                                        messages[targetIdx] = last.copy(content = res.strippedContent)
+                                        nextAutoReadPayload = res.payload
+                                    }
+                                    is SafReadResult.Error -> {
+                                        messages.add(Message(role = "assistant", content = res.message))
+                                        safRetryTargetIdx = targetIdx
+                                        safRetryOps = readOps
+                                    }
+                                    is SafReadResult.Timeout -> {
+                                        messages.add(Message(role = "assistant", content = res.message))
+                                        safRetryTargetIdx = targetIdx
+                                        safRetryOps = readOps
                                     }
                                 }
-                            } catch (ce: CancellationException) {
-                                throw ce
-                            } catch (se: SecurityException) {
-                                android.util.Log.e("DeepApk", "SAF read SecurityException", se)
-                                safErr = "> 🔒 Доступ к папке проекта отозван или изменился. Переподключи папку через чип SAF в шапке и повтори."
-                                null
-                            } catch (te: Throwable) {
-                                android.util.Log.e("DeepApk", "SAF read failed", te)
-                                safErr = "> ⚠️ Ошибка SAF-чтения: ${te.javaClass.simpleName}: ${te.message ?: "unknown"}"
-                                null
-                            }
-                            if (res == null && safErr == null && !cancelRequested) {
-                                safErr = "> ⏱ SAF-чтение не ответило за 180 с (файл большой или папка недоступна). Нажми «Отправить» ещё раз, чтобы повторить."
-                            }
-                            if (safErr != null && !cancelRequested) {
-                                messages.add(Message(role = "assistant", content = safErr))
-                                safRetryTargetIdx = targetIdx
-                                safRetryOps = readOps
-                            }
-                            if (res != null && !cancelRequested) {
-                                safRetryTargetIdx = -1
-                                safRetryOps = emptyList()
-                                messages[targetIdx] = last.copy(content = ProjectFs.stripReadTags(last.content, res.first))
-                                nextAutoReadPayload = res.second
                             }
                         }
                     }
@@ -553,39 +543,43 @@ fun ChatScreen(
         val lastMsg = messages.lastOrNull()
         if (lastMsg != null && lastMsg.role == "assistant") {
             val c = lastMsg.content
-            if (c.startsWith("> 🔒 Доступ к папке") || c.startsWith("> ⚠️ Ошибка SAF-чтения") ||
-                c.startsWith("> ⏱ SAF-чтение") || c.startsWith("> ⏱ Повторное SAF-чтение")) {
+            if (ChatSafController.isSafErrorMessage(c)) {
                 messages.removeAt(messages.size - 1)
             }
         }
         safStatus = "Повторяю SAF-чтение…"
         scope.launch {
-            val res = try {
-                kotlinx.coroutines.withTimeoutOrNull(180_000L) {
-                    kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
-                        ProjectFs.executeReadOps(ctx, rOps)
+            val modelMsg = messages.getOrNull(rIdx)
+            val res = ChatSafController.runSafRead(
+                ctx = ctx,
+                ops = rOps,
+                originalContent = modelMsg?.content ?: "",
+                timeoutMsg = "> ⏱ Повторное SAF-чтение не ответило. Проверь папку и попробуй снова."
+            )
+            if (!cancelRequested) {
+                when (res) {
+                    is SafReadResult.Success -> {
+                        if (modelMsg != null) {
+                            messages[rIdx] = modelMsg.copy(content = res.strippedContent)
+                        }
+                        safStatus = "Отправляю файлы ИИ…"
+                        messages.add(Message(role = "user", content = res.payload))
+                        persistCurrentSession()
+                        startStream(scrollAnchorIdx = messages.size - 1, toolDepth = 1)
+                    }
+                    is SafReadResult.Error -> {
+                        safStatus = ""
+                        messages.add(Message(role = "assistant", content = res.message))
+                        safRetryTargetIdx = rIdx
+                        safRetryOps = rOps
+                    }
+                    is SafReadResult.Timeout -> {
+                        safStatus = ""
+                        messages.add(Message(role = "assistant", content = res.message))
+                        safRetryTargetIdx = rIdx
+                        safRetryOps = rOps
                     }
                 }
-            } catch (ce: CancellationException) { throw ce }
-            catch (se: SecurityException) {
-                android.util.Log.e("DeepApk", "SAF retry SecurityException", se); null
-            } catch (te: Throwable) {
-                android.util.Log.e("DeepApk", "SAF retry failed", te); null
-            }
-            if (res != null && !cancelRequested) {
-                val modelMsg = messages.getOrNull(rIdx)
-                if (modelMsg != null) {
-                    messages[rIdx] = modelMsg.copy(content = ProjectFs.stripReadTags(modelMsg.content, res.first))
-                }
-                safStatus = "Отправляю файлы ИИ…"
-                messages.add(Message(role = "user", content = res.second))
-                persistCurrentSession()
-                startStream(scrollAnchorIdx = messages.size - 1, toolDepth = 1)
-            } else {
-                safStatus = ""
-                messages.add(Message(role = "assistant", content = "> ⏱ Повторное SAF-чтение не ответило. Проверь папку и попробуй снова."))
-                safRetryTargetIdx = rIdx
-                safRetryOps = rOps
             }
         }
     }
