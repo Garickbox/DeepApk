@@ -968,11 +968,15 @@ fun ChatScreen(
                         isDark = isDark,
                         onApply = {
                             val ops = pendingFsEdits
+                            pendingFsEdits = emptyList()  // закрыть бар сразу — независимо от исхода
                             scope.launch {
-                                val res = withContext(Dispatchers.IO) { ProjectFs.applyWithBackup(ctx, ops) }
+                                val res = try {
+                                    withContext(Dispatchers.IO) { ProjectFs.applyWithBackup(ctx, ops) }
+                                } catch (e: Throwable) {
+                                    FsApplyResult(false, "Ошибка применения: " + (e.message ?: e.javaClass.simpleName))
+                                }
                                 backupFilesCount = ProjectFs.activeBackupCount(ctx)
                                 if (res.ok) {
-                                    pendingFsEdits = emptyList()
                                     Toast.makeText(ctx, res.message, Toast.LENGTH_SHORT).show()
                                 } else {
                                     error = res.message

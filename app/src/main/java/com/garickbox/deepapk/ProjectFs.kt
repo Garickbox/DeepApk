@@ -437,7 +437,14 @@ object ProjectFs {
         return count
     }
 
-    fun applyWithBackup(ctx: Context, ops: List<FsWriteOp>): FsApplyResult {
+    fun applyWithBackup(ctx: Context, ops: List<FsWriteOp>): FsApplyResult = try {
+        applyWithBackupInternal(ctx, ops)
+    } catch (e: Throwable) {
+        Log.e("DeepApk", "applyWithBackup crashed: " + e.javaClass.simpleName + ": " + e.message, e)
+        FsApplyResult(false, "Ошибка применения: " + (e.message ?: e.javaClass.simpleName))
+    }
+
+    private fun applyWithBackupInternal(ctx: Context, ops: List<FsWriteOp>): FsApplyResult {
         val treeUri = getTreeUri(ctx) ?: return FsApplyResult(false, "Папка проекта не подключена")
         if (ops.isEmpty()) return FsApplyResult(false, "Нет операций для применения")
 
