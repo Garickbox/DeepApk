@@ -40,7 +40,7 @@ object ProjectFs {
     private const val KEY_LABEL = "tree_label"
     private const val KEY_ENABLED = "auto_enabled"
 
-    private val IGNORED_DIRS = setOf(".git", ".gradle", "build", ".idea", "apk", "node_modules", "__pycache__", ".cxx")
+    private val IGNORED_DIRS = setOf(".git", ".gradle", "build", ".idea", "apk", "node_modules", "__pycache__", ".cxx", ".ocr")
     private val BINARY_EXTS = setOf(
         "png", "jpg", "jpeg", "webp", "gif", "ico", "jar", "apk", "aab",
         "so", "dex", "class", "zip", "ttf", "otf", "pdf", "docx", "xlsx", "pptx"
@@ -307,6 +307,52 @@ object ProjectFs {
         if (!isTextFile(entry.name, entry.size)) return null
         val bytes = readBytesDoc(ctx, treeUri, entry.docId) ?: return null
         return String(bytes, Charsets.UTF_8).replace("\r\n", "\n")
+    }
+
+    fun writeRelFile(ctx: Context, relPath: String, text: String): Boolean {
+        val treeUri = getTreeUri(ctx) ?: return false
+        return try {
+            val (doc, _) = ensureFileDoc(ctx, treeUri, relPath) ?: return false
+            writeBytesDoc(ctx, treeUri, doc.docId, text.toByteArray(Charsets.UTF_8))
+        } catch (ce: CancellationException) { throw ce }
+        catch (te: Throwable) {
+            Log.e("DeepApk", "writeRelFile($relPath): ${te.javaClass.simpleName}: ${te.message}", te)
+            false
+        }
+    }
+
+    fun readRelFile(ctx: Context, relPath: String): String? {
+        val treeUri = getTreeUri(ctx) ?: return null
+        return try {
+            val doc = findDoc(ctx, treeUri, relPath) ?: return null
+            if (doc.isDir) return null
+            val bytes = readBytesDoc(ctx, treeUri, doc.docId) ?: return null
+            String(bytes, Charsets.UTF_8)
+        } catch (ce: CancellationException) { throw ce }
+        catch (_: Throwable) { null }
+    }
+
+    fun deleteRelPath(ctx: Context, relPath: String): Boolean {
+        val treeUri = getTreeUri(ctx) ?: return false
+        return try {
+            val doc = findDoc(ctx, treeUri, relPath) ?: return false
+            val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, doc.docId)
+            DocumentsContract.deleteDocument(ctx.contentResolver, uri)
+        } catch (ce: CancellationException) { throw ce }
+        catch (te: Throwable) {
+            Log.e("DeepApk", "deleteRelPath($relPath): ${te.javaClass.simpleName}", te)
+            false
+        }
+    }
+
+    fun listRelChildren(ctx: Context, relPath: String): List<Triple<String, Boolean, Long>> {
+        val treeUri = getTreeUri(ctx) ?: return emptyList()
+        return try {
+            val doc = findDoc(ctx, treeUri, relPath) ?: return emptyList()
+            if (!doc.isDir) return emptyList()
+            listChildren(ctx, treeUri, doc.docId).map { Triple(it.name, it.isDir, it.size) }
+        } catch (ce: CancellationException) { throw ce }
+        catch (_: Throwable) { emptyList() }
     }
 
     fun readFileLines(ctx: Context, relPath: String, start: Int = 1, end: Int = 150): String {

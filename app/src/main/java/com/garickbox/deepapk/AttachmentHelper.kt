@@ -132,7 +132,7 @@ private suspend fun runOcrOn(recognizer: TextRecognizer, image: InputImage): Tex
     }
 }
 
-private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 50): String? =
+private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 500): String? =
     withContext(Dispatchers.IO) {
         var renderer: PdfRenderer? = null
         var pfd2: ParcelFileDescriptor? = null
@@ -203,8 +203,17 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 50): String? 
             if (total > maxPages) {
                 sb.append("[... PDF ").append(total).append(" стр., обработано первых ").append(maxPages).append("]")
             }
-            val result = sb.toString().trim()
-            if (result.isBlank()) null else result
+            val fullText = sb.toString().trim()
+            if (fullText.isBlank()) return@withContext null
+            if (pages > 30) {
+                val marker = "=== Страница "
+                val i1 = fullText.indexOf(marker)
+                val i2 = if (i1 >= 0) fullText.indexOf(marker, i1 + marker.length) else -1
+                val i3 = if (i2 >= 0) fullText.indexOf(marker, i2 + marker.length) else -1
+                val head = if (i3 > 0) fullText.substring(0, i3).trimEnd() else fullText
+                val safDir = if (fileHash != null && ProjectFs.isReady(ctx)) ".ocr/$fileHash/" else "filesDir/ocr_base/${fileHash ?: "?"}/"
+                "📄 OCR готов: $pages стр. → $safDir\n📖 Начало для контекста:\n\n$head\n\n[…остальные ${pages - 2} стр. — используй <fs_grep> / <fs_read> в $safDir]"
+            } else fullText
         } catch (e: Throwable) {
             Log.e("OCR", "ocrPdf: " + e.message, e)
             null
