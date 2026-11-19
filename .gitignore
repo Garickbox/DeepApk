@@ -35,3 +35,6 @@ check_ci_last.sh
 # OS
 .DS_Store
 Thumbs.db
+
+# OCR-кэш пользовательских книг (178+ page_*.md)
+.ocr/

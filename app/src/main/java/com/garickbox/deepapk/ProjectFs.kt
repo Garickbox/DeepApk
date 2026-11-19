@@ -695,7 +695,8 @@ internal fun normalizeDsml(input: String): String {
 internal fun isPlaceholderPath(input: String): Boolean {
     val s = input.trim()
     if (s.isEmpty()) return false
-    if (s.length <= 2) return true
+    // Заглушка = ТОЛЬКО из точек/звёздочек/знаков вопроса ('..', '...', '???')
+    // Короткие имена ('a', 'b', 'X') — валидные имена файлов без расширения.
     if (s.all { it == '.' || it == '\u2026' || it == '*' || it == '?' || it == '_' }) return true
     return false
 }
