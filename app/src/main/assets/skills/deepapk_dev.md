@@ -8,18 +8,20 @@
   - `ChatScreen.kt` — экран чата, drawer сессий, TopBar (заголовок, чип роли, чип SAF-папки, переключатель `DS / ✦ Gemini`), лента (`ChatFeedItem`, `splitUserAttachments` сворачивает `[Файл: ...]` и `[Файл: 📂 SAF ...]` в компактные чипсы), `startStream` (стриминг + авто-чтение SAF до 4 шагов + `<skill_save>`), диалоги пресетов и бэкап-баннер.
   - `ProjectFs.kt` — доступ к папке проекта через SAF (`DocumentsContract`), `listTree`, `grepProject`, `readFileLines` (до 180 строк), транзакционный `applyWithBackup` / `commitBackupOk` / `rollbackBackup`.
   - `SkillPackage.kt` — формат `deepapk-skill-v1` (`.deepapk`), импорт из `VIEW`/`SEND`/`📂 Из файла` и экспорт `📤 .deepapk` через `FileProvider`.
-  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` (сейчас 5) обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
+  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` (сейчас 6) обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
   - `DocxEngine.kt` — генератор ГОСТ `.docx` из `<doc_report>` (OOXML ZIP, таблицы `autofit`, `<svg>` в PNG, `PAGE` в колонтитуле, автосохранение HTML).
   - `MarkdownRenderer.kt` — парсер Markdown/кода/таблиц/`<doc_report>`, кнопки `Termux`, `🌐 Открыть`, `🌐 Посмотреть`, `📥 Скачать .docx`.
   - `DeepSeekApi.kt`, `ChatStore.kt`, `SettingsStore.kt`, `SettingsScreen.kt`, `AttachmentHelper.kt`, `TermuxBridge.kt`, `UpdateChecker.kt`.
 
 ## 2. ДОСТУП К КОДУ ЧЕРЕЗ SAF (КОГДА ПОДКЛЮЧЕНА ПАПКА ПРОЕКТА)
 Если в чате активен SAF-доступ к папке проекта:
+
+**Тег должен занимать ВСЁ сообщение.** Перед тегом не должно быть ни одного символа: ни `>`, ни `🔍`, ни `📂 SAF:`, ни `(N..M)`, ни бэктиков, ни пояснений. Иначе DeepApk не распарсит тег и вернёт дерево или пусто. Путь всегда полный от корня репозитория.
 1. **НЕ гадай строки и НЕ проси пользователя гонять `grep` вручную** — сам выведи нужный тег:
    - `<fs_tree/>` или `<fs_tree path="app/src/main"/>`
    - `<fs_grep pattern="CURRENT_VER" path="app/src/main"/>`
-   - `<fs_read path="app/src/main/java/com/garickbox/deepapk/ChatScreen.kt" start="1" end="160"/>`
-2. За один шаг читай не больше 160–180 строк (экономь токены!), сначала `tree`/`grep`, потом точечный `read`.
+   - `<fs_read path="app/src/main/java/com/garickbox/deepapk/ChatScreen.kt" start="1" end="180"/>`
+2. За один шаг читай не больше 180 строк (экономь токены!), сначала `tree`/`grep`, потом точечный `read`.
 3. Для правки напрямую через SAF используй теги:
    - `<fs_patch path="..."><old>точный фрагмент</old><new>новый код</new></fs_patch>` (DeepApk проверит `count == 1`, сделает бэкап в `filesDir/fs_backups`, применит и покажет пользователю кнопки `✅ ОК` / `↩️ Откат`).
    - `<fs_write path="...">полный текст</fs_write>` — только для небольших новых файлов.
@@ -40,7 +42,7 @@
 ## 4. ЧАСТЫЕ ГРАБЛИ ПРОЕКТА (НЕ ПОВТОРЯТЬ)
 - В Kotlin-строках нельзя 8-значный юникод-эскейп (нужны суррогаты UTF-16 или живые UTF-8 эмодзи), не ставь лишний слэш перед `uXXXX` в UI-строках.
 - В `DocxEngine.kt` выравнивание абзаца строго `left` (не `both`).
-- Не вызывать `PresetStore.defaults()` без `ctx`; при обновлении встроенных `.md` скиллов поднимай `CURRENT_VER` в `PresetStore.kt` (сейчас 5).
+- Не вызывать `PresetStore.defaults()` без `ctx`; при обновлении встроенных `.md` скиллов поднимай `CURRENT_VER` в `PresetStore.kt` (сейчас 6).
 - В `AndroidManifest.xml` фильтр `android:pathSuffix` требует `android:host="*"`.
 - Не ломай `imePadding` / `navigationBarsPadding`, не используй `continue` внутри inline-лямбд (`forEach`), используй формат `[Файл: ...]` для сворачивания в чипс.
 - Если пользователь просит не писать код («не пиши», «обсуди») — отвечай без кода.
