@@ -74,32 +74,6 @@ private sealed class ChatFeedItem(val key: String) {
 private const val SECTOR_SIZE = 28
 private const val SECTOR_STEP = 20
 
-private const val MAX_HISTORY_CHARS = 150_000
-
-private fun capHistory(msgs: List<Message>, maxChars: Int = MAX_HISTORY_CHARS): List<Message> {
-    if (msgs.isEmpty()) return msgs
-    val sizes = msgs.map { it.content.length }
-    val total = sizes.sum()
-    if (total <= maxChars) return msgs
-    val kept = mutableListOf<Int>()
-    var acc = 0
-    for (i in msgs.indices.reversed()) {
-        val sz = sizes[i]
-        if (kept.isNotEmpty() && acc + sz > maxChars) break
-        kept.add(0, i)
-        acc += sz
-    }
-    if (kept.isNotEmpty() && kept.first() > 0) {
-        val firstSz = sizes[0]
-        if (acc + firstSz <= maxChars) {
-            kept.add(0, 0)
-            acc += firstSz
-        }
-    }
-    android.util.Log.w("DeepApk", "history capped: ${msgs.size} -> ${kept.size} msgs, chars $total -> $acc")
-    return kept.map { msgs[it] }
-}
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
@@ -626,126 +600,18 @@ fun ChatScreen(
         drawerState = drawerState,
         gesturesEnabled = !streaming,
         drawerContent = {
-            ModalDrawerSheet(
-                modifier = Modifier.width(300.dp),
-                drawerContainerColor = MaterialTheme.colorScheme.background
-            ) {
-                Column(Modifier.fillMaxHeight().padding(horizontal = 14.dp, vertical = 12.dp)) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(22.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("🔍", fontSize = 14.sp)
-                        Spacer(Modifier.width(8.dp))
-                        BasicTextField(
-                            value = drawerSearch,
-                            onValueChange = { drawerSearch = it },
-                            singleLine = true,
-                            textStyle = TextStyle(
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onBackground
-                            ),
-                            cursorBrush = SolidColor(DeepSeekBlue),
-                            modifier = Modifier.weight(1f),
-                            decorationBox = { inner ->
-                                Box {
-                                    if (drawerSearch.isEmpty()) {
-                                        Text(
-                                            "Поиск в содержимом чата…",
-                                            fontSize = 14.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    inner()
-                                }
-                            }
-                        )
-                        if (drawerSearch.isNotEmpty()) {
-                            Text(
-                                "✕",
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.clickable { drawerSearch = "" }.padding(2.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.height(12.dp))
-
-                    LazyColumn(Modifier.weight(1f)) {
-                        items(filteredSessions.size, key = { filteredSessions[it].id }) { i ->
-                            val s = filteredSessions[i]
-                            val selected = s.id == activeSessionId
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 2.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        if (selected) MaterialTheme.colorScheme.surface
-                                        else Color.Transparent
-                                    )
-                                    .clickable {
-                                        switchSession(s)
-                                        scope.launch { drawerState.close() }
-                                    }
-                                    .padding(horizontal = 10.dp, vertical = 11.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = s.title,
-                                    fontSize = 14.5.sp,
-                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Text(
-                                    "🗑",
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .clickable { deleteSession(s.id) }
-                                        .padding(start = 8.dp, top = 2.dp, bottom = 2.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 8.dp),
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable {
-                                scope.launch { drawerState.close() }
-                                onOpenSettings()
-                            }
-                            .padding(horizontal = 6.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        DeepWhaleLogo(sizeDp = 34, isGemini = settings.provider == "gemini")
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("DeepApk · ${BuildConfig.VERSION_NAME}", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                            Text(
-                                if (settings.provider == "deepseek" && balanceText.isNotBlank()) "Баланс: $balanceText"
-                                else settings.activeModelLabel(),
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Text("⋯", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
+            ChatDrawerSheet(
+                drawerSearch = drawerSearch,
+                onDrawerSearchChange = { drawerSearch = it },
+                filteredSessions = filteredSessions,
+                activeSessionId = activeSessionId,
+                onSwitchSession = { switchSession(it); scope.launch { drawerState.close() } },
+                onDeleteSession = { deleteSession(it) },
+                onCloseDrawer = { scope.launch { drawerState.close() } },
+                onOpenSettings = onOpenSettings,
+                settings = settings,
+                balanceText = balanceText
+            )
         }
     ) {
         Box(
@@ -2434,5 +2300,4 @@ fun ChatScreen(
         }
     }
 }
-
 
