@@ -205,11 +205,15 @@ object ProjectFs {
         val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
         val os = try {
             ctx.contentResolver.openOutputStream(uri, "wt")
+        } catch (ce1: CancellationException) {
+            throw ce1
         } catch (e1: Exception) {
             try {
                 ctx.contentResolver.openOutputStream(uri, "w")
+            } catch (ce2: CancellationException) {
+                throw ce2
             } catch (e2: Exception) {
-                Log.w("DeepApk", "writeBytesDoc($docId) both modes failed: wt=${e1.message}, w=${e2.message}")
+                Log.e("DeepApk", "writeBytesDoc($docId) both modes failed: wt=${e1.message}, w=${e2.message}")
                 null
             }
         } ?: return false
@@ -260,8 +264,12 @@ object ProjectFs {
 
         fun scanFile(docId: String, fullPath: String, name: String, size: Long) {
             if (hits.size >= maxHits || !isTextFile(name, size)) return
-            val bytes = try { readBytesDoc(ctx, treeUri, docId) } catch (e: Exception) {
-                Log.w("DeepApk", "grep read $fullPath: ${e.message}"); null
+            val bytes = try { readBytesDoc(ctx, treeUri, docId) } catch (ce: CancellationException) {
+                throw ce
+            } catch (se: SecurityException) {
+                Log.e("DeepApk", "grep read $fullPath SecurityException", se); null
+            } catch (te: Throwable) {
+                Log.e("DeepApk", "grep read $fullPath failed: ${te.javaClass.simpleName}: ${te.message}", te); null
             } ?: return
             val lines = String(bytes, Charsets.UTF_8).replace("\r\n", "\n").split('\n')
             for ((idx, line) in lines.withIndex()) {
@@ -577,9 +585,14 @@ object ProjectFs {
             }
             backupDir(ctx).deleteRecursively()
             FsApplyResult(true, "Откат выполнен (${restored.size} файл.)", restored)
-        } catch (e: Exception) {
-            Log.w("DeepApk", "rollbackBackup failed: ${e.javaClass.simpleName}: ${e.message}")
-            FsApplyResult(false, "Ошибка отката: ${e.message}")
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (se: SecurityException) {
+            Log.e("DeepApk", "rollbackBackup SecurityException", se)
+            FsApplyResult(false, "Ошибка отката (SecurityException): ${se.message}")
+        } catch (te: Throwable) {
+            Log.e("DeepApk", "rollbackBackup failed: ${te.javaClass.simpleName}: ${te.message}", te)
+            FsApplyResult(false, "Ошибка отката: ${te.message}")
         }
     }
 }
