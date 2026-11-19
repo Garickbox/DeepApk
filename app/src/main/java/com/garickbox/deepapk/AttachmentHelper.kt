@@ -132,7 +132,13 @@ private suspend fun runOcrOn(recognizer: TextRecognizer, image: InputImage): Tex
     }
 }
 
-private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 500): String? =
+internal suspend fun ocrPdf(
+    ctx: Context,
+    uri: Uri,
+    maxPages: Int = 500,
+    onProgress: ((Int, Int) -> Unit)? = null,
+    forChat: Boolean = true
+): String? =
     withContext(Dispatchers.IO) {
         var renderer: PdfRenderer? = null
         var pfd2: ParcelFileDescriptor? = null
@@ -171,6 +177,8 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 500): String?
             val scale = 3.0f
             Log.d("OCR", "ocrPdf: pages=$pages scale=3.0 psm=SINGLE_BLOCK")
             for (i in 0 until pages) {
+                kotlinx.coroutines.yield()
+                onProgress?.invoke(i + 1, pages)
                 val cached = if (fileHash != null) OcrCache.get(ctx, fileHash, i) else null
                 if (cached != null) {
                     Log.d("OCR", "cache HIT page=${i + 1} len=${cached.length}")
@@ -205,6 +213,9 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 500): String?
             }
             val fullText = sb.toString().trim()
             if (fullText.isBlank()) return@withContext null
+            if (!forChat) {
+                return@withContext "OK: $pages стр. сохранено в .ocr/${fileHash ?: "?"}/"
+            }
             if (pages > 30) {
                 val marker = "=== Страница "
                 val i1 = fullText.indexOf(marker)

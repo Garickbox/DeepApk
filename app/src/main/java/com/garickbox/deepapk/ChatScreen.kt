@@ -158,6 +158,11 @@ fun ChatScreen(
     var pendingFsEdits by remember { mutableStateOf<List<FsWriteOp>>(emptyList()) }
     var showProjectFsDialog by remember { mutableStateOf(false) }
     var showOcrBaseDialog by remember { mutableStateOf(false) }
+    var ocrBusy by remember { mutableStateOf(false) }
+    var ocrCur by remember { mutableStateOf(0) }
+    var ocrTotal by remember { mutableStateOf(0) }
+    var ocrJob by remember { mutableStateOf<Job?>(null) }
+    var ocrRefreshKey by remember { mutableStateOf(0) }
     val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             try {
@@ -2374,11 +2379,40 @@ fun ChatScreen(
         }
     }
 
+    val ocrPdfPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null && !ocrBusy) {
+            ocrJob = scope.launch {
+                ocrBusy = true
+                ocrCur = 0
+                ocrTotal = 0
+                try {
+                    AttachmentHelper.ocrPdf(
+                        ctx = ctx,
+                        uri = uri,
+                        forChat = false,
+                        onProgress = { cur, total ->
+                            ocrCur = cur
+                            ocrTotal = total
+                        }
+                    )
+                    ocrRefreshKey++
+                } catch (_: kotlinx.coroutines.CancellationException) {
+                    // отменено — обработанные страницы остаются в кеше
+                } catch (e: Throwable) {
+                    android.util.Log.e("OCR", "manual upload: " + e.message, e)
+                } finally {
+                    ocrBusy = false
+                }
+            }
+        }
+    }
     if (showOcrBaseDialog) {
         var reloadKey by remember { mutableStateOf(0) }
         var confirmClear by remember { mutableStateOf(false) }
-        val ocrStats = remember(reloadKey) { OcrCache.stats(ctx) }
-        val ocrList = remember(reloadKey) { OcrCache.list(ctx) }
+        val ocrStats = remember(reloadKey, ocrRefreshKey) { OcrCache.stats(ctx) }
+        val ocrList = remember(reloadKey, ocrRefreshKey) { OcrCache.list(ctx) }
         AlertDialog(
             onDismissRequest = { showOcrBaseDialog = false; confirmClear = false },
             title = { Text("📚 База OCR", fontSize = 17.sp, fontWeight = FontWeight.SemiBold) },
@@ -2394,6 +2428,29 @@ fun ChatScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(10.dp))
+                    if (ocrBusy) {
+                        Text(
+                            "📖 OCR: $ocrCur / ${if (ocrTotal > 0) ocrTotal else "?"}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        if (ocrTotal > 0) {
+                            LinearProgressIndicator(
+                                progress = { ocrCur.toFloat() / ocrTotal.toFloat() },
+                                modifier = Modifier.fillMaxWidth().height(6.dp)
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(6.dp))
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Можно отменить — уже распознанные страницы остаются в базе",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
                     if (ocrList.isEmpty()) {
                         Text(
                             "Пока пусто. Распознай PDF — каждая страница сохранится здесь (по содержимому, не по имени). Повторная обработка того же файла пойдёт из базы — секунды вместо минут.",
@@ -2439,18 +2496,32 @@ fun ChatScreen(
                 }
             },
             confirmButton = {
-                if (ocrList.isNotEmpty()) {
-                    if (confirmClear) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (ocrList.isNotEmpty() && !ocrBusy) {
+                        if (confirmClear) {
+                            Button(
+                                onClick = {
+                                    OcrCache.clear(ctx)
+                                    confirmClear = false
+                                    reloadKey++
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                            ) { Text("Удалить всё") }
+                            Spacer(Modifier.width(6.dp))
+                        } else {
+                            OutlinedButton(onClick = { confirmClear = true }) { Text("🗑") }
+                            Spacer(Modifier.width(6.dp))
+                        }
+                    }
+                    if (ocrBusy) {
                         Button(
-                            onClick = {
-                                OcrCache.clear(ctx)
-                                confirmClear = false
-                                reloadKey++
-                            },
+                            onClick = { ocrJob?.cancel() },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
-                        ) { Text("Удалить всё") }
+                        ) { Text("⏹ Отменить") }
                     } else {
-                        OutlinedButton(onClick = { confirmClear = true }) { Text("🗑 Очистить всё") }
+                        Button(onClick = { ocrPdfPicker.launch(arrayOf("application/pdf")) }) {
+                            Text("📥 Загрузить PDF")
+                        }
                     }
                 }
             },
