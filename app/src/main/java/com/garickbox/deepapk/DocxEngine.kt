@@ -186,6 +186,7 @@ object DocxEngine {
         var sub = 0
         var sup = 0
         var fill = 0
+        var mono = 0
         val stack = mutableListOf<String>()
 
         fun rPrXml(): String {
@@ -197,6 +198,7 @@ object DocxEngine {
             else if (sup > 0) p.append("<w:vertAlign w:val=\"superscript\"/>")
             if (forceCaps) p.append("<w:caps/>")
             if (fill > 0) p.append("<w:highlight w:val=\"yellow\"/>")
+            if (mono > 0) p.append("<w:rFonts w:ascii=\"Courier New\" w:hAnsi=\"Courier New\" w:cs=\"Courier New\"/><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"F4F4F4\"/>")
             if (baseSzHalfPt != null) p.append("<w:sz w:val=\"$baseSzHalfPt\"/><w:szCs w:val=\"$baseSzHalfPt\"/>")
             return if (p.isEmpty()) "" else "<w:rPr>$p</w:rPr>"
         }
@@ -209,6 +211,7 @@ object DocxEngine {
                 "u" -> u++
                 "sub" -> sub++
                 "sup" -> sup++
+                "code", "kbd", "samp", "tt", "pre" -> mono++
                 "span" -> if (Regex("\\b(fill|ans)\\b").containsMatchIn(attrs)) {
                     if (attrs.contains("fill")) fill++
                     if (attrs.contains("ans")) b++
@@ -226,6 +229,7 @@ object DocxEngine {
                 "u" -> if (u > 0) u--
                 "sub" -> if (sub > 0) sub--
                 "sup" -> if (sup > 0) sup--
+                "code", "kbd", "samp", "tt", "pre" -> if (mono > 0) mono--
                 "span" -> {
                     if (fill > 0) fill--
                 }
@@ -427,6 +431,33 @@ object DocxEngine {
                         "table" -> {
                             val (inner, next) = collectUntil("table", i + 1)
                             bodyXml.append(buildTableXml(inner))
+                            i = next
+                        }
+                        "pre" -> {
+                            val (inner, next) = collectUntil("pre", i + 1)
+                            val sb = StringBuilder()
+                            inner.forEach { it2 ->
+                                when (it2) {
+                                    is HToken.Text -> sb.append(unescapeHtml(it2.text))
+                                    is HToken.Open -> if (it2.tag == "br") sb.append("\n")
+                                    is HToken.Close -> {}
+                                    is HToken.Svg -> {}
+                                }
+                            }
+                            val lines = sb.toString()
+                                .replace("\r\n", "\n")
+                                .replace('\r', '\n')
+                                .split('\n')
+                            lines.forEach { line ->
+                                val t = line.replace("\t", "    ")
+                                val runText = if (t.isEmpty()) " " else t
+                                bodyXml.append(
+                                    "<w:p><w:pPr><w:ind w:firstLine=\"0\" w:left=\"360\"/><w:jc w:val=\"left\"/>" +
+                                        "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"F5F5F5\"/></w:pPr>" +
+                                        "<w:r><w:rPr><w:rFonts w:ascii=\"Courier New\" w:hAnsi=\"Courier New\" w:cs=\"Courier New\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/></w:rPr>" +
+                                        "<w:t xml:space=\"preserve\">${xmlEsc(runText)}</w:t></w:r></w:p>"
+                                )
+                            }
                             i = next
                         }
                         else -> i++
