@@ -12,6 +12,7 @@ apk/
 # Local config & secrets
 local.properties
 *.keystore
+!app/debug.keystore
 *.jks
 
 # Logs & temp
