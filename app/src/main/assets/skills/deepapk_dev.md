@@ -12,7 +12,7 @@
   - `ContextActions.kt` — `copyPlain`, `ContextMenuItem`, `ModePill`, `DeepWhaleLogo`. **Вынесен из `ChatScreen.kt`.**
   - `ProjectFs.kt` — доступ к папке проекта через SAF (`DocumentsContract`), `listTree`, `grepProject`, `readFileLines` (до 180 строк), транзакционный `applyWithBackup` / `commitBackupOk` / `rollbackBackup`.
   - `SkillPackage.kt` — формат `deepapk-skill-v1` (`.deepapk`), импорт из VIEW/SEND/диалога и экспорт через `FileProvider`.
-  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 7** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
+  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 8** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
   - `DocxEngine.kt` — генератор ГОСТ `.docx` из блока `doc_report` (OOXML ZIP, autofit-таблицы, svg в PNG, PAGE в колонтитуле, автосохранение HTML).
   - `MarkdownRenderer.kt` — парсер Markdown/кода/таблиц/doc_report, кнопки Termux, Открыть, Посмотреть, Скачать .docx.
   - `DeepSeekApi.kt`, `ChatStore.kt`, `SettingsStore.kt`, `SettingsScreen.kt`, `AttachmentHelper.kt`, `TermuxBridge.kt`, `UpdateChecker.kt`.
@@ -55,7 +55,7 @@
 ## 4. ЧАСТЫЕ ГРАБЛИ ПРОЕКТА (НЕ ПОВТОРЯТЬ)
 - В Kotlin-строках нельзя 8-значный юникод-эскейп (нужны суррогаты UTF-16 или живые UTF-8 эмодзи), не ставь лишний слэш перед uXXXX в UI-строках.
 - В DocxEngine.kt выравнивание абзаца строго `left` (не `both`).
-- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **7**).
+- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **8**).
 - В AndroidManifest.xml фильтр pathSuffix требует `android:host="*"`.
 - Не ломай imePadding / navigationBarsPadding, не используй continue внутри inline-лямбд (forEach), используй формат `[Файл: ...]` для сворачивания в чипс.
 - Если пользователь просит не писать код — отвечай без кода.
