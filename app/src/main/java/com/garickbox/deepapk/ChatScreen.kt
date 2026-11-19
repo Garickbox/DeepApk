@@ -74,6 +74,32 @@ private sealed class ChatFeedItem(val key: String) {
 private const val SECTOR_SIZE = 28
 private const val SECTOR_STEP = 20
 
+private const val MAX_HISTORY_CHARS = 150_000
+
+private fun capHistory(msgs: List<Message>, maxChars: Int = MAX_HISTORY_CHARS): List<Message> {
+    if (msgs.isEmpty()) return msgs
+    val sizes = msgs.map { it.content.length }
+    val total = sizes.sum()
+    if (total <= maxChars) return msgs
+    val kept = mutableListOf<Int>()
+    var acc = 0
+    for (i in msgs.indices.reversed()) {
+        val sz = sizes[i]
+        if (kept.isNotEmpty() && acc + sz > maxChars) break
+        kept.add(0, i)
+        acc += sz
+    }
+    if (kept.isNotEmpty() && kept.first() > 0) {
+        val firstSz = sizes[0]
+        if (acc + firstSz <= maxChars) {
+            kept.add(0, 0)
+            acc += firstSz
+        }
+    }
+    android.util.Log.w("DeepApk", "history capped: ${msgs.size} -> ${kept.size} msgs, chars $total -> $acc")
+    return kept.map { msgs[it] }
+}
+
 private fun splitUserAttachments(raw: String): Pair<List<Pair<String, String>>, String> {
     if (!raw.contains("[Файл: ")) return emptyList<Pair<String, String>>() to raw
     val lines = raw.replace("\r\n", "\n").split("\n")
@@ -347,11 +373,12 @@ fun ChatScreen(
             messages.add(Message(role = "assistant", content = ""))
             messages.size - 1
         }
-        val historySlice = if (continueTargetIdx != null) {
+        val rawHistory = if (continueTargetIdx != null) {
             messages.subList(0, continueTargetIdx + 1).toList()
         } else {
             messages.dropLast(1)
         }
+        val historySlice = capHistory(rawHistory)
         if (continueTargetIdx != null) {
             messages[targetIdx] = messages[targetIdx].copy(truncated = false)
         }
