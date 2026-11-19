@@ -2388,11 +2388,11 @@ fun ChatScreen(
                 ocrCur = 0
                 ocrTotal = 0
                 try {
-                    AttachmentHelper.ocrPdf(
+                    ocrPdf(
                         ctx = ctx,
                         uri = uri,
                         forChat = false,
-                        onProgress = { cur, total ->
+                        onProgress = { cur: Int, total: Int ->
                             ocrCur = cur
                             ocrTotal = total
                         }
