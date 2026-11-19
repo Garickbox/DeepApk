@@ -99,10 +99,13 @@ private suspend fun tesseractOcr(ctx: Context, uri: Uri): String? = withContext(
             BitmapFactory.decodeStream(it, null, opts)
         } ?: return@withContext null
         tess = TessBaseAPI()
-        if (!tess.init(root.absolutePath, "rus+eng")) {
+        if (!tess.init(root.absolutePath, "rus+eng", TessBaseAPI.OcrEngineMode.OEM_LSTM_ONLY)) {
             Log.e("OCR", "tess.init failed")
             return@withContext null
         }
+        tess.setPageSegMode(TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT)
+        tess.setVariable("user_defined_dpi", "300")
+        tess.setVariable("preserve_interword_spaces", "1")
         tess.setImage(bmp)
         val text = tess.getUTF8Text() ?: ""
         Log.d("OCR", "tess5 dim=${bmp.width}x${bmp.height} len=${text.length} conf=${try { tess.meanConfidence() } catch (_: Throwable) { -1 }}")
@@ -111,7 +114,7 @@ private suspend fun tesseractOcr(ctx: Context, uri: Uri): String? = withContext(
         Log.e("OCR", "tesseract: " + e.message, e)
         null
     } finally {
-        try { tess?.end() } catch (_: Throwable) {}
+        try { tess?.recycle() } catch (_: Throwable) {}
         try { bmp?.recycle() } catch (_: Throwable) {}
     }
 }
@@ -137,7 +140,7 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 20): String? 
         try {
             val root = ensureTessdata(ctx)
             tess = TessBaseAPI()
-            if (!tess.init(root.absolutePath, "rus+eng")) {
+            if (!tess.init(root.absolutePath, "rus+eng", TessBaseAPI.OcrEngineMode.OEM_LSTM_ONLY)) {
                 Log.e("OCR", "ocrPdf: tess.init failed")
                 return@withContext null
             }
@@ -155,7 +158,12 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 20): String? 
             val total = renderer.pageCount
             val pages = total.coerceAtMost(maxPages)
             val sb = StringBuilder()
+            tess.setPageSegMode(TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK)
+            tess.setVariable("user_defined_dpi", "300")
+            tess.setVariable("preserve_interword_spaces", "1")
+            tess.setVariable("textord_tabfind_find_tables", "1")
             val scale = 3.0f
+            Log.d("OCR", "ocrPdf: pages=$pages scale=3.0 psm=SINGLE_BLOCK")
             for (i in 0 until pages) {
                 val page = renderer.openPage(i)
                 try {
@@ -184,7 +192,7 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 20): String? 
             Log.e("OCR", "ocrPdf: " + e.message, e)
             null
         } finally {
-            try { tess?.end() } catch (_: Throwable) {}
+            try { tess?.recycle() } catch (_: Throwable) {}
             try { renderer?.close() } catch (_: Throwable) {}
             try { pfd2?.close() } catch (_: Throwable) {}
             try { tmp?.delete() } catch (_: Throwable) {}
