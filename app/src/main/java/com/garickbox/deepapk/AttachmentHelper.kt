@@ -99,7 +99,7 @@ private suspend fun tesseractOcr(ctx: Context, uri: Uri): String? = withContext(
             BitmapFactory.decodeStream(it, null, opts)
         } ?: return@withContext null
         tess = TessBaseAPI()
-        if (!tess.init(root.absolutePath, "rus+eng", TessBaseAPI.OcrEngineMode.OEM_LSTM_ONLY)) {
+        if (!tess.init(root.absolutePath, "rus+eng", TessBaseAPI.OEM_LSTM_ONLY)) {
             Log.e("OCR", "tess.init failed")
             return@withContext null
         }
@@ -140,7 +140,7 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 20): String? 
         try {
             val root = ensureTessdata(ctx)
             tess = TessBaseAPI()
-            if (!tess.init(root.absolutePath, "rus+eng", TessBaseAPI.OcrEngineMode.OEM_LSTM_ONLY)) {
+            if (!tess.init(root.absolutePath, "rus+eng", TessBaseAPI.OEM_LSTM_ONLY)) {
                 Log.e("OCR", "ocrPdf: tess.init failed")
                 return@withContext null
             }
