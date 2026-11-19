@@ -3,6 +3,7 @@ package com.garickbox.deepapk
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -127,7 +128,9 @@ object ProjectFs {
                     out.add(DocEntry(id, name, mime == DocumentsContract.Document.MIME_TYPE_DIR, size))
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w("DeepApk", "listChildren($parentDocId) failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
         return out.sortedWith(compareBy<DocEntry> { !it.isDir }.thenBy { it.name.lowercase() })
     }
 
@@ -180,15 +183,25 @@ object ProjectFs {
 
     private fun readBytesDoc(ctx: Context, treeUri: Uri, docId: String): ByteArray? {
         val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-        return ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        return try {
+            ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        } catch (e: Exception) {
+            Log.w("DeepApk", "readBytesDoc($docId) failed: ${e.javaClass.simpleName}: ${e.message}")
+            null
+        }
     }
 
     private fun writeBytesDoc(ctx: Context, treeUri: Uri, docId: String, bytes: ByteArray): Boolean {
         val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
         val os = try {
             ctx.contentResolver.openOutputStream(uri, "wt")
-        } catch (_: Exception) {
-            try { ctx.contentResolver.openOutputStream(uri, "w") } catch (_: Exception) { null }
+        } catch (e1: Exception) {
+            try {
+                ctx.contentResolver.openOutputStream(uri, "w")
+            } catch (e2: Exception) {
+                Log.w("DeepApk", "writeBytesDoc($docId) both modes failed: wt=${e1.message}, w=${e2.message}")
+                null
+            }
         } ?: return false
         os.use { it.write(bytes); it.flush() }
         return true
@@ -237,7 +250,9 @@ object ProjectFs {
 
         fun scanFile(docId: String, fullPath: String, name: String, size: Long) {
             if (hits.size >= maxHits || !isTextFile(name, size)) return
-            val bytes = try { readBytesDoc(ctx, treeUri, docId) } catch (_: Exception) { null } ?: return
+            val bytes = try { readBytesDoc(ctx, treeUri, docId) } catch (e: Exception) {
+                Log.w("DeepApk", "grep read $fullPath: ${e.message}"); null
+            } ?: return
             val lines = String(bytes, Charsets.UTF_8).replace("\r\n", "\n").split('\n')
             for ((idx, line) in lines.withIndex()) {
                 if (hits.size >= maxHits) break
@@ -272,8 +287,9 @@ object ProjectFs {
         val entry = findDoc(ctx, treeUri, relPath) ?: return "[SAF: файл не найден: $relPath]"
         if (entry.isDir) return listTree(ctx, relPath)
         if (!isTextFile(entry.name, entry.size)) return "[SAF: бинарный или слишком большой файл: $relPath (${entry.size} B)]"
-        val bytes = try { readBytesDoc(ctx, treeUri, entry.docId) } catch (_: Exception) { null }
-            ?: return "[SAF: ошибка чтения $relPath]"
+        val bytes = try { readBytesDoc(ctx, treeUri, entry.docId) } catch (e: Exception) {
+            Log.w("DeepApk", "readFileLines($relPath) failed: ${e.message}"); null
+        } ?: return "[SAF: ошибка чтения $relPath]"
         val lines = String(bytes, Charsets.UTF_8).replace("\r\n", "\n").split('\n')
         if (lines.isEmpty()) return "[Пустой файл: $relPath]"
         val s = start.coerceIn(1, lines.size)
@@ -497,7 +513,9 @@ object ProjectFs {
     }
 
     fun commitBackupOk(ctx: Context) {
-        backupDir(ctx).deleteRecursively()
+        try { backupDir(ctx).deleteRecursively() } catch (e: Exception) {
+            Log.w("DeepApk", "commitBackupOk delete failed: ${e.message}")
+        }
     }
 
     fun rollbackBackup(ctx: Context): FsApplyResult {
@@ -521,13 +539,16 @@ object ProjectFs {
                     restored.add(path)
                 } else if (doc != null) {
                     val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, doc.docId)
-                    try { DocumentsContract.deleteDocument(ctx.contentResolver, uri) } catch (_: Exception) {}
+                    try { DocumentsContract.deleteDocument(ctx.contentResolver, uri) } catch (e: Exception) {
+                        Log.w("DeepApk", "deleteDocument($path) failed: ${e.message}")
+                    }
                     restored.add("$path (удалён)")
                 }
             }
             backupDir(ctx).deleteRecursively()
             FsApplyResult(true, "Откат выполнен (${restored.size} файл.)", restored)
         } catch (e: Exception) {
+            Log.w("DeepApk", "rollbackBackup failed: ${e.javaClass.simpleName}: ${e.message}")
             FsApplyResult(false, "Ошибка отката: ${e.message}")
         }
     }
