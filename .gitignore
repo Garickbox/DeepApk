@@ -26,6 +26,12 @@ deep_tmp/
 *.backup_*
 *.bak
 
+# Personal / local-only
+RESUME.md
+deepapk_all.sh
+deepapk_go.sh
+check_ci_last.sh
+
 # OS
 .DS_Store
 Thumbs.db

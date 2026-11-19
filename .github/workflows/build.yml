@@ -13,6 +13,8 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v3
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon
       - name: Build
         run: ./gradlew assembleDebug --no-daemon
       - name: Rename APK
