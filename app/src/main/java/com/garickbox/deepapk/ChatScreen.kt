@@ -15,6 +15,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.DialogProperties
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -182,12 +183,63 @@ fun ChatScreen(
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val att = readAttachment(ctx, uri)
-            if (att != null) {
-                attachments.add(att)
+            val mime = ctx.contentResolver.getType(uri).orEmpty()
+            if (mime.startsWith("image/")) {
+                scope.launch {
+                    val att = ocrImage(ctx, uri)
+                    if (att != null) attachments.add(att)
+                    else Toast.makeText(ctx, "Не удалось распознать фото", Toast.LENGTH_SHORT).show()
+                }
             } else {
-                Toast.makeText(ctx, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
+                val att = readAttachment(ctx, uri)
+                if (att != null) {
+                    attachments.add(att)
+                } else {
+                    Toast.makeText(ctx, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
+                }
             }
+        }
+    }
+
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    val photoOcrPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val att = ocrImage(ctx, uri)
+                if (att != null) attachments.add(att)
+                else Toast.makeText(ctx, "Не удалось распознать фото", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val cameraPicker = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val uri = cameraUri
+        if (ok && uri != null) {
+            scope.launch {
+                val att = ocrImage(ctx, uri)
+                if (att != null) attachments.add(att)
+                else Toast.makeText(ctx, "Не удалось распознать фото", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun launchPhotoOcr() {
+        try {
+            photoOcrPicker.launch("image/*")
+        } catch (e: Exception) {
+            Toast.makeText(ctx, "Галерея недоступна: " + e.message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun launchCameraOcr() {
+        try {
+            val f = java.io.File(ctx.cacheDir, "ocr_" + System.currentTimeMillis() + ".jpg")
+            val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", f)
+            cameraUri = uri
+            cameraPicker.launch(uri)
+        } catch (e: Exception) {
+            Toast.makeText(ctx, "Камера недоступна: " + e.message, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1423,6 +1475,28 @@ fun ChatScreen(
                             }
                         )
                         Spacer(Modifier.weight(1f))
+
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
+                                .clickable { launchPhotoOcr() },
+                            contentAlignment = Alignment.Center
+                        ) { Text("\uD83D\uDCF7", fontSize = 14.sp) }
+
+                        Spacer(Modifier.width(6.dp))
+
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
+                                .clickable { launchCameraOcr() },
+                            contentAlignment = Alignment.Center
+                        ) { Text("\uD83D\uDCF8", fontSize = 14.sp) }
+
+                        Spacer(Modifier.width(6.dp))
 
                         Box(
                             modifier = Modifier

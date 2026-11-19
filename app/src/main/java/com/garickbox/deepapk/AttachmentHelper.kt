@@ -9,6 +9,15 @@ import android.util.Xml
 import org.xmlpull.v1.XmlPullParser
 import java.io.ByteArrayInputStream
 import java.util.zip.ZipInputStream
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.google.mlkit.vision.text.cyrillic.CyrillicTextRecognizerOptions
+import com.google.mlkit.vision.text.TextRecognizer
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 data class AttachedFile(
     val name: String,
@@ -49,6 +58,58 @@ fun readAttachment(ctx: Context, uri: Uri): AttachedFile? {
         val kb = (if (sizeBytes > 0) sizeBytes else raw.size.toLong()) / 1024
         val label = if (kb > 0) "${kb}KB" else "${raw.size}B"
         AttachedFile(name = name, sizeLabel = label, content = text)
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private suspend fun runOcrOn(recognizer: TextRecognizer, image: InputImage): Text? {
+    return try {
+        suspendCancellableCoroutine<Text> { cont ->
+            recognizer.process(image)
+                .addOnSuccessListener { v: Text -> if (cont.isActive) cont.resume(v) }
+                .addOnFailureListener { e -> if (cont.isActive) cont.resumeWithException(e) }
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+suspend fun ocrImage(ctx: Context, uri: Uri): AttachedFile? {
+    return try {
+        val image = InputImage.fromFilePath(ctx, uri)
+        val latin = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        val cyr = TextRecognition.getClient(CyrillicTextRecognizerOptions.Builder().build())
+        try {
+            val a = runOcrOn(latin, image)
+            val b = runOcrOn(cyr, image)
+            val pick: Text? = when {
+                a == null && b == null -> null
+                a == null -> b
+                b == null -> a
+                else -> if (b.text.length > a.text.length) b else a
+            }
+            if (pick == null || pick.text.isBlank()) return null
+            var name = "ocr_photo.jpg"
+            ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    val nIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nIdx >= 0) name = c.getString(nIdx) ?: name
+                }
+            }
+            val sb = StringBuilder()
+            for (block in pick.textBlocks) {
+                for (line in block.lines) sb.append(line.text).append('\n')
+                sb.append('\n')
+            }
+            val cleanText = sb.toString().trim()
+            val finalText = if (cleanText.length > 50000) cleanText.take(50000) + "\n... [обрезано]" else cleanText
+            val label = "" + pick.textBlocks.size + " блоков"
+            AttachedFile(name = "\uD83D\uDCF7 " + name, sizeLabel = label, content = finalText)
+        } finally {
+            latin.close()
+            cyr.close()
+        }
     } catch (_: Exception) {
         null
     }
