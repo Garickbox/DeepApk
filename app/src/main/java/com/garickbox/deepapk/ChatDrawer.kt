@@ -32,6 +32,7 @@ internal fun ChatDrawerSheet(
     onDeleteSession: (String) -> Unit,
     onCloseDrawer: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenOcrBase: () -> Unit,
     settings: AppSettings,
     balanceText: String
 ) {
@@ -129,6 +130,28 @@ internal fun ChatDrawerSheet(
                             modifier = Modifier.padding(vertical = 8.dp),
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
                         )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    onCloseDrawer()
+                                    onOpenOcrBase()
+                                }
+                                .padding(horizontal = 6.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("📚", fontSize = 16.sp, modifier = Modifier.width(34.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("База OCR", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                Text(
+                                    "офлайн-кеш распознанных страниц",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text("›", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()

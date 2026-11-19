@@ -159,6 +159,9 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 50): String? 
             val total = renderer.pageCount
             val pages = total.coerceAtMost(maxPages)
             val sb = StringBuilder()
+            val fileHash = OcrCache.fileHash(ctx, uri)
+            val origName = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "pdf"
+            Log.d("OCR", "ocrPdf: hash=${fileHash?.take(12)} name=$origName")
             tess.setPageSegMode(TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK)
             tess.setVariable("user_defined_dpi", "300")
             tess.setVariable("preserve_interword_spaces", "1")
@@ -168,6 +171,13 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 50): String? 
             val scale = 3.0f
             Log.d("OCR", "ocrPdf: pages=$pages scale=3.0 psm=SINGLE_BLOCK")
             for (i in 0 until pages) {
+                val cached = if (fileHash != null) OcrCache.get(ctx, fileHash, i) else null
+                if (cached != null) {
+                    Log.d("OCR", "cache HIT page=${i + 1} len=${cached.length}")
+                    sb.append("=== Страница ").append(i + 1).append(" / ").append(total).append(" ===\n")
+                    sb.append(cached.trim()).append('\n').append('\n')
+                    continue
+                }
                 val page = renderer.openPage(i)
                 try {
                     val w = (page.width * scale).toInt().coerceAtLeast(1)
@@ -178,6 +188,10 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 50): String? 
                     tess.setImage(bmp)
                     val pageText = tess.getUTF8Text() ?: ""
                     bmp.recycle()
+                    if (fileHash != null && pageText.isNotBlank()) {
+                        OcrCache.put(ctx, fileHash, i, pageText, origName)
+                    }
+                    Log.d("OCR", "cache MISS page=${i + 1} len=${pageText.length}")
                     sb.append("=== Страница ").append(i + 1).append(" / ").append(total).append(" ===\n")
                     if (pageText.isBlank()) sb.append("[нет текста]\n")
                     else sb.append(pageText.trim()).append('\n')
