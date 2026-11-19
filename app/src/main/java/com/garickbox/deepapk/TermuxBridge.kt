@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.util.Log
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -46,6 +47,10 @@ object TermuxBridge {
             code.toByteArray(Charsets.UTF_8)
         )
         if (savedPath == null) {
+            if ((isShell || isPython) && tryRunCommandInline(ctx, isPython, code)) {
+                Toast.makeText(ctx, "Передано inline в Termux", Toast.LENGTH_SHORT).show()
+                return
+            }
             copyToClipboard(ctx, code)
             Toast.makeText(ctx, "Не удалось записать файл — код скопирован", Toast.LENGTH_SHORT).show()
             return
@@ -84,6 +89,26 @@ object TermuxBridge {
         }
     }
 
+    private fun tryRunCommandInline(ctx: Context, isPython: Boolean, code: String): Boolean {
+        if (!hasRunPermission(ctx)) return false
+        return try {
+            val bin = if (isPython) "/data/data/com.termux/files/usr/bin/python"
+                      else "/data/data/com.termux/files/usr/bin/bash"
+            val intent = Intent("com.termux.RUN_COMMAND").apply {
+                component = ComponentName("com.termux", "com.termux.app.RunCommandService")
+                putExtra("com.termux.RUN_COMMAND_PATH", bin)
+                putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", code))
+                putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
+                putExtra("com.termux.RUN_COMMAND_BACKGROUND", false)
+            }
+            ctx.startService(intent)
+            true
+        } catch (e: Exception) {
+            Log.w("DeepApk", "tryRunCommandInline failed: ${e.javaClass.simpleName}: ${e.message}")
+            false
+        }
+    }
+
     private fun tryRunCommandIntent(ctx: Context, isPython: Boolean, filePath: String): Boolean {
         if (!hasRunPermission(ctx)) return false
         return try {
@@ -101,7 +126,8 @@ object TermuxBridge {
             }
             ctx.startService(intent)
             true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w("DeepApk", "tryRunCommandIntent failed: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
     }
@@ -133,14 +159,21 @@ object TermuxBridge {
                     runCatching {
                         resolver.openOutputStream(uri, "wt")?.use { os -> os.write(bytes) }
                         uri
-                    }.getOrNull()
+                    }.getOrElse { e ->
+                        Log.w("DeepApk", "open existing $uri failed: ${e.javaClass.simpleName}: ${e.message}")
+                        null
+                    }
                 } ?: run {
                     val values = ContentValues().apply {
                         put(MediaStore.Downloads.DISPLAY_NAME, fileName)
                         put(MediaStore.Downloads.MIME_TYPE, mimeType)
                         put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                     }
-                    val newUri = resolver.insert(collection, values) ?: return null
+                    val newUri = resolver.insert(collection, values)
+                    if (newUri == null) {
+                        Log.w("DeepApk", "MediaStore.insert returned null: name=$fileName mime=$mimeType")
+                        return null
+                    }
                     resolver.openOutputStream(newUri, "wt")?.use { os -> os.write(bytes) }
                     newUri
                 }
@@ -158,7 +191,8 @@ object TermuxBridge {
                     }
                 }
                 "/sdcard/Download/$actualName"
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.w("DeepApk", "writeBytesToDownloads($fileName) failed: ${e.javaClass.simpleName}: ${e.message}")
                 null
             }
         } else {
