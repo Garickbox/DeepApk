@@ -486,6 +486,7 @@ fun ChatScreen(
                             withContext(Dispatchers.IO) { DocxEngine.saveHtmlSilently(ctx, t, h) }
                         }
                     }
+                    // fs_parse test marker — safe to keep
                     val writeOps = ProjectFs.extractWriteOps(last.content)
                     android.util.Log.w("DeepApk", "fs_parse: len=" + last.content.length + " hasFp=" + last.content.contains("<fs_patch") + " hasFw=" + last.content.contains("<fs_write") + " ops=" + writeOps.size + " ready=" + ProjectFs.isReady(ctx) + " tail=" + last.content.takeLast(80).replace("\n", "\\n"))
                     if (ProjectFs.isReady(ctx) && writeOps.isNotEmpty()) pendingFsEdits = writeOps
@@ -964,48 +965,24 @@ fun ChatScreen(
                 }
 
                 if (pendingFsEdits.isNotEmpty()) {
-                    Surface(
-                        color = if (isDark) Color(0xFF1A2236) else Color(0xFFEEF3FF),
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 3.dp),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val filesSummary = pendingFsEdits.joinToString(", ") { it.path.substringAfterLast('/') }
-                            Text(
-                                "✏️ Правки SAF: $filesSummary",
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Button(
-                                onClick = {
-                                    val ops = pendingFsEdits
-                                    scope.launch {
-                                        val res = withContext(Dispatchers.IO) { ProjectFs.applyWithBackup(ctx, ops) }
-                                        backupFilesCount = ProjectFs.activeBackupCount(ctx)
-                                        if (res.ok) {
-                                            pendingFsEdits = emptyList()
-                                            Toast.makeText(ctx, res.message, Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            error = res.message
-                                        }
-                                    }
-                                },
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                                shape = RoundedCornerShape(8.dp)
-                            ) { Text("💾 Бэкап+Применить", fontSize = 11.5.sp) }
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                "✕",
-                                fontSize = 14.sp,
-                                modifier = Modifier.clickable { pendingFsEdits = emptyList() }.padding(6.dp)
-                            )
-                        }
-                    }
+                    PendingFsEditsBar(
+                        edits = pendingFsEdits,
+                        isDark = isDark,
+                        onApply = {
+                            val ops = pendingFsEdits
+                            scope.launch {
+                                val res = withContext(Dispatchers.IO) { ProjectFs.applyWithBackup(ctx, ops) }
+                                backupFilesCount = ProjectFs.activeBackupCount(ctx)
+                                if (res.ok) {
+                                    pendingFsEdits = emptyList()
+                                    Toast.makeText(ctx, res.message, Toast.LENGTH_SHORT).show()
+                                } else {
+                                    error = res.message
+                                }
+                            }
+                        },
+                        onDismiss = { pendingFsEdits = emptyList() }
+                    )
                 }
 
                 if (safStatus.isNotBlank()) {
