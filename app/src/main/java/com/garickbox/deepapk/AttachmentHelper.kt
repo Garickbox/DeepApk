@@ -13,6 +13,12 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.googlecode.tesseract.android.TessBaseAPI
+import android.graphics.BitmapFactory
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import com.google.mlkit.vision.text.TextRecognizer
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -62,6 +68,50 @@ fun readAttachment(ctx: Context, uri: Uri): AttachedFile? {
     }
 }
 
+private suspend fun ensureTessdata(ctx: Context): File = withContext(Dispatchers.IO) {
+    val root = File(ctx.filesDir, "tess").apply { mkdirs() }
+    val dir = File(root, "tessdata").apply { mkdirs() }
+    for (name in listOf("rus.traineddata", "eng.traineddata")) {
+        val f = File(dir, name)
+        if (!f.exists() || f.length() < 100_000L) {
+            try {
+                ctx.assets.open("tessdata/" + name).use { inp ->
+                    f.outputStream().use { out -> inp.copyTo(out) }
+                }
+            } catch (e: Exception) {
+                Log.e("OCR", "copy " + name + " failed: " + e.message, e)
+            }
+        }
+    }
+    root
+}
+
+private suspend fun tesseractOcr(ctx: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
+    var tess: TessBaseAPI? = null
+    var bmp: android.graphics.Bitmap? = null
+    try {
+        val root = ensureTessdata(ctx)
+        val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
+        bmp = ctx.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, opts)
+        } ?: return@withContext null
+        tess = TessBaseAPI()
+        if (!tess.init(root.absolutePath, "rus+eng")) {
+            Log.e("OCR", "tess.init failed")
+            return@withContext null
+        }
+        tess.setImage(bmp)
+        val text = tess.getUTF8Text() ?: ""
+        if (text.isBlank()) null else text
+    } catch (e: Throwable) {
+        Log.e("OCR", "tesseract: " + e.message, e)
+        null
+    } finally {
+        try { tess?.end() } catch (_: Throwable) {}
+        try { bmp?.recycle() } catch (_: Throwable) {}
+    }
+}
+
 private suspend fun runOcrOn(recognizer: TextRecognizer, image: InputImage): Text? {
     return try {
         suspendCancellableCoroutine<Text> { cont ->
@@ -76,31 +126,46 @@ private suspend fun runOcrOn(recognizer: TextRecognizer, image: InputImage): Tex
 
 suspend fun ocrImage(ctx: Context, uri: Uri): AttachedFile? {
     return try {
-        val image = InputImage.fromFilePath(ctx, uri)
-        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        try {
-            val pick = runOcrOn(recognizer, image) ?: return null
-            if (pick.text.isBlank()) return null
-            var name = "ocr_photo.jpg"
-            ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
-                if (c.moveToFirst()) {
-                    val nIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (nIdx >= 0) name = c.getString(nIdx) ?: name
+        var finalText: String? = null
+        var label = ""
+
+        val tessText = tesseractOcr(ctx, uri)
+        if (!tessText.isNullOrBlank() && tessText.length > 3) {
+            finalText = tessText.trim()
+            label = tessText.count { it == '\n' }.plus(1).toString() + " строк (tess)"
+        } else {
+            val image = InputImage.fromFilePath(ctx, uri)
+            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            try {
+                val pick = runOcrOn(recognizer, image)
+                if (pick != null && pick.text.isNotBlank()) {
+                    val sb = StringBuilder()
+                    for (block in pick.textBlocks) {
+                        for (line in block.lines) sb.append(line.text).append('\n')
+                        sb.append('\n')
+                    }
+                    finalText = sb.toString().trim()
+                    label = pick.textBlocks.size.toString() + " блоков (mlkit)"
                 }
+            } finally {
+                recognizer.close()
             }
-            val sb = StringBuilder()
-            for (block in pick.textBlocks) {
-                for (line in block.lines) sb.append(line.text).append('\n')
-                sb.append('\n')
-            }
-            val cleanText = sb.toString().trim()
-            val finalText = if (cleanText.length > 50000) cleanText.take(50000) + "\n... [обрезано]" else cleanText
-            val label = "" + pick.textBlocks.size + " блоков"
-            AttachedFile(name = "\uD83D\uDCF7 " + name, sizeLabel = label, content = finalText)
-        } finally {
-            recognizer.close()
         }
-    } catch (_: Exception) {
+
+        if (finalText.isNullOrBlank()) return null
+
+        var name = "ocr_photo.jpg"
+        ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                val nIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nIdx >= 0) name = c.getString(nIdx) ?: name
+            }
+        }
+
+        val trimmed = if (finalText.length > 50000) finalText.take(50000) + "\n... [обрезано]" else finalText
+        AttachedFile(name = "\uD83D\uDCF7 " + name, sizeLabel = label, content = trimmed)
+    } catch (e: Throwable) {
+        Log.e("OCR", "ocrImage: " + e.message, e)
         null
     }
 }
