@@ -106,6 +106,7 @@ private suspend fun tesseractOcr(ctx: Context, uri: Uri): String? = withContext(
         tess.setPageSegMode(TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT)
         tess.setVariable("user_defined_dpi", "300")
         tess.setVariable("preserve_interword_spaces", "1")
+        tess.setVariable("textord_heavy_nr", "1")
         tess.setImage(bmp)
         val text = tess.getUTF8Text() ?: ""
         Log.d("OCR", "tess5 dim=${bmp.width}x${bmp.height} len=${text.length} conf=${try { tess.meanConfidence() } catch (_: Throwable) { -1 }}")
@@ -131,7 +132,7 @@ private suspend fun runOcrOn(recognizer: TextRecognizer, image: InputImage): Tex
     }
 }
 
-private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 20): String? =
+private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 50): String? =
     withContext(Dispatchers.IO) {
         var renderer: PdfRenderer? = null
         var pfd2: ParcelFileDescriptor? = null
@@ -162,6 +163,8 @@ private suspend fun ocrPdf(ctx: Context, uri: Uri, maxPages: Int = 20): String? 
             tess.setVariable("user_defined_dpi", "300")
             tess.setVariable("preserve_interword_spaces", "1")
             tess.setVariable("textord_tabfind_find_tables", "1")
+            tess.setVariable("textord_heavy_nr", "1")
+            tess.setVariable("tessedit_preserve_min_wd_len", "2")
             val scale = 3.0f
             Log.d("OCR", "ocrPdf: pages=$pages scale=3.0 psm=SINGLE_BLOCK")
             for (i in 0 until pages) {
