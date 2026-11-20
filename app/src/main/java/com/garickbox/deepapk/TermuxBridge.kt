@@ -306,6 +306,97 @@ object TermuxBridge {
 
 
     /** Обернуть строку в одиночные кавычки bash: 'abc', с экранированием встроенных ' */
+
+    /**
+     * Запускает скрипт БЕЗ escape-магии: пишет scriptText в файл
+     * /sdcard/Android/media/com.garickbox.deepapk/jobs/job_xxx.{sh,py}
+     * и запускает через <interp> '<file>' > log 2>&1; echo $? > exit.
+     * Надёжно для heredoc, { } блоков, многострочных скриптов — никаких ' проблем.
+     */
+    suspend fun runScriptAndWatch(
+        ctx: Context,
+        scriptText: String,
+        interpreter: String,
+        stallTimeoutSec: Int = 40,
+        totalTimeoutSec: Int = 180,
+        onTick: (Int, String) -> Unit,
+        onDone: (Int, String, Int) -> Unit
+    ) = withContext(Dispatchers.IO) {
+        try {
+            if (!hasRunPermission(ctx)) {
+                withContext(Dispatchers.Main) { onDone(-1, "Нет разрешения RUN_COMMAND. Настройки - Termux - Прямой запуск команд - Разрешить", 0) }
+                return@withContext
+            }
+            val clean = scriptText.replace("\r\n", "\n").replace("\r", "\n")
+            if (clean.isBlank()) {
+                withContext(Dispatchers.Main) { onDone(-1, "Пустой скрипт", 0) }
+                return@withContext
+            }
+            val mediaRoot = File(Environment.getExternalStorageDirectory(), "Android/media/com.garickbox.deepapk")
+            val jobsDir = File(mediaRoot, "jobs")
+            if (!jobsDir.exists() && !jobsDir.mkdirs()) {
+                withContext(Dispatchers.Main) { onDone(-1, "Не удалось создать " + jobsDir.absolutePath, 0) }
+                return@withContext
+            }
+            val jobId = "job_" + System.currentTimeMillis() + "_" + (1000..9999).random()
+            val isPy = interpreter == "python3"
+            val ext = if (isPy) "py" else "sh"
+            val scriptFile = File(jobsDir, jobId + "." + ext)
+            val logFile = File(jobsDir, jobId + ".log")
+            val exitFile = File(jobsDir, jobId + ".exit")
+            scriptFile.writeText(clean)
+            val interpBin = if (isPy) "python3" else "bash"
+            val wrapper = interpBin + " '" + scriptFile.absolutePath + "' > '" + logFile.absolutePath + "' 2>&1; echo \$? > '" + exitFile.absolutePath + "'"
+            try {
+                val bin = "/data/data/com.termux/files/usr/bin/bash"
+                val intent = Intent("com.termux.RUN_COMMAND").apply {
+                    component = ComponentName("com.termux", "com.termux.app.RunCommandService")
+                    putExtra("com.termux.RUN_COMMAND_PATH", bin)
+                    putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", wrapper))
+                    putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
+                    putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+                }
+                ctx.startService(intent)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { onDone(-1, "startService: " + (e.message ?: ""), 0) }
+                return@withContext
+            }
+            val start = System.currentTimeMillis()
+            var lastLen = 0L
+            var lastChange = start
+            while (true) {
+                delay(1500)
+                val elapsed = ((System.currentTimeMillis() - start) / 1000).toInt()
+                val exitCode = if (exitFile.exists()) runCatching { exitFile.readText().trim().toIntOrNull() }.getOrNull() else null
+                if (exitCode != null) {
+                    val body = if (logFile.exists()) runCatching { logFile.readText().take(8000) }.getOrDefault("") else ""
+                    withContext(Dispatchers.Main) { onDone(exitCode, body, elapsed) }
+                    return@withContext
+                }
+                val curLen = if (logFile.exists()) logFile.length() else 0L
+                if (curLen > lastLen) { lastLen = curLen; lastChange = System.currentTimeMillis() }
+                val lastLine = if (logFile.exists()) {
+                    runCatching { logFile.readLines().takeLast(2).joinToString(" | ").take(200) }.getOrDefault("")
+                } else ""
+                withContext(Dispatchers.Main) { onTick(elapsed, lastLine) }
+                val stall = (System.currentTimeMillis() - lastChange) / 1000
+                if (stall > stallTimeoutSec) {
+                    val body = if (logFile.exists()) runCatching { logFile.readText().take(8000) }.getOrDefault("") else ""
+                    withContext(Dispatchers.Main) { onDone(-2, body + "\n[stall: нет вывода " + stall + "с]", elapsed) }
+                    return@withContext
+                }
+                if (elapsed > totalTimeoutSec) {
+                    val body = if (logFile.exists()) runCatching { logFile.readText().take(8000) }.getOrDefault("") else ""
+                    withContext(Dispatchers.Main) { onDone(-3, body + "\n[total: " + elapsed + "с]", elapsed) }
+                    return@withContext
+                }
+            }
+        } catch (e: Throwable) {
+            val msg = (e.message ?: e.javaClass.simpleName).take(400)
+            withContext(Dispatchers.Main) { onDone(-1, "exception: " + msg, 0) }
+        }
+    }
+
     fun escapeSingle(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
     fun copyToClipboard(ctx: Context, text: String) {
