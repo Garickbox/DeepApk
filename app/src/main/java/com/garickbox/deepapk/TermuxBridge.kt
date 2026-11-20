@@ -232,8 +232,17 @@ object TermuxBridge {
                 withContext(Dispatchers.Main) { onDone(-1, "Нет разрешения RUN_COMMAND", 0) }
                 return@withContext
             }
-            val jobsDir = File("/sdcard/Download/deepapk_jobs")
-            if (!jobsDir.exists()) jobsDir.mkdirs()
+            // Shared media dir Android 11+: DeepApk пишет/читает без разрешений (своя media-папка),
+            // Termux с MANAGE_EXTERNAL_STORAGE видит и пишет туда тоже.
+            val mediaRoot = File(Environment.getExternalStorageDirectory(),
+                "Android/media/com.garickbox.deepapk")
+            val jobsDir = File(mediaRoot, "jobs")
+            if (!jobsDir.exists() && !jobsDir.mkdirs()) {
+                withContext(Dispatchers.Main) {
+                    onDone(-1, "Не удалось создать ${jobsDir.absolutePath}", 0)
+                }
+                return@withContext
+            }
             val jobId = "job_" + System.currentTimeMillis() + "_" + (1000..9999).random()
             val logFile = File(jobsDir, "$jobId.log")
             val exitFile = File(jobsDir, "$jobId.exit")
@@ -262,10 +271,10 @@ object TermuxBridge {
                 delay(1500)
                 val elapsed = ((System.currentTimeMillis() - start) / 1000).toInt()
 
-                val exitText = if (exitFile.exists()) exitFile.readText().trim() else null
+                val exitText = if (exitFile.exists()) runCatching { exitFile.readText().trim() }.getOrNull() else null
                 val exitCode = exitText?.toIntOrNull()
                 if (exitCode != null) {
-                    val body = if (logFile.exists()) logFile.readText().take(8000) else ""
+                    val body = if (logFile.exists()) runCatching { logFile.readText().take(8000) }.getOrDefault("") else ""
                     withContext(Dispatchers.Main) { onDone(exitCode, body, elapsed) }
                     return@withContext
                 }
@@ -282,12 +291,12 @@ object TermuxBridge {
 
                 val stall = (System.currentTimeMillis() - lastChange) / 1000
                 if (stall > stallTimeoutSec) {
-                    val body = if (logFile.exists()) logFile.readText().take(8000) else ""
+                    val body = if (logFile.exists()) runCatching { logFile.readText().take(8000) }.getOrDefault("") else ""
                     withContext(Dispatchers.Main) { onDone(-2, body + "\n[stall timeout: нет вывода ${stall}с]", elapsed) }
                     return@withContext
                 }
                 if (elapsed > totalTimeoutSec) {
-                    val body = if (logFile.exists()) logFile.readText().take(8000) else ""
+                    val body = if (logFile.exists()) runCatching { logFile.readText().take(8000) }.getOrDefault("") else ""
                     withContext(Dispatchers.Main) { onDone(-3, body + "\n[total timeout: ${elapsed}с]", elapsed) }
                     return@withContext
                 }
