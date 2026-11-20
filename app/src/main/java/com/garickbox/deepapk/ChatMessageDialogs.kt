@@ -94,7 +94,7 @@ internal fun SelectTextDialog(
     onEmptySelection: () -> Unit
 ) {
     val textColArgb = MaterialTheme.colorScheme.onBackground.toArgb()
-    var tvRef by remember(message.id) { mutableStateOf<TextView?>() }
+    var tvRef by remember(message.id) { mutableStateOf<TextView?>(null) }
     fun getSelectedText(): String {
         val tv = tvRef ?: return ""
         val a = tv.selectionStart
@@ -152,7 +152,9 @@ internal fun SelectTextDialog(
                                     }
                                     override fun onDestroyActionMode(mode: ActionMode?) {}
                                 }
-                                addView(
+                            }
+                            tvRef = tv
+                            addView(
                                 tv,
                                 ViewGroup.LayoutParams(
                                     ViewGroup.LayoutParams.MATCH_PARENT,
