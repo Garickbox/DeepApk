@@ -1,14 +1,13 @@
 package com.garickbox.deepapk
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.InlineTextContent
-import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,16 +20,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.Placeholder
-import androidx.compose.ui.text.PlaceholderVerticalAlign
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -38,6 +31,9 @@ import androidx.compose.ui.unit.sp
  * TextField с поддержкой чипсов [Файл: ...] + fence.
  * В поле ввода [Файл: 💻 bash ✅ exit=0 · 1с] + ```...``` сворачивается
  * в компактный чипс. Полный текст остаётся в value (уходит в API).
+ *
+ * Реализация: BasicTextField + overlay Box с чипсами.
+ * inlineContent в BasicTextField не поддерживается (только в Text).
  */
 @Composable
 fun ChipTextField(
@@ -51,83 +47,64 @@ fun ChipTextField(
     maxLines: Int = 6,
     cursorColor: Color = DeepSeekBlue
 ) {
-    val annotated = remember(value) { buildChipAnnotated(value) }
-    val inlineContent = buildInlineContent(value)
-    var tfv by remember { mutableStateOf(TextFieldValue(annotated, selection = TextRange(value.length))) }
+    var tfv by remember { mutableStateOf(TextFieldValue(value, selection = TextRange(value.length))) }
 
     LaunchedEffect(value) {
         if (tfv.text != value) {
-            tfv = TextFieldValue(annotated, selection = TextRange(value.length))
+            tfv = TextFieldValue(value, selection = TextRange(value.length))
         }
     }
 
-    BasicTextField(
-        value = tfv,
-        onValueChange = { new: TextFieldValue ->
-            tfv = new
-            onValueChange(new.text)
-        },
-        modifier = modifier,
-        maxLines = maxLines,
-        textStyle = TextStyle(color = textColor, fontSize = fontSizeSp.sp, lineHeight = lineHeightSp.sp),
-        cursorBrush = SolidColor(cursorColor),
-        inlineContent = inlineContent,
-        decorationBox = { inner: @Composable () -> Unit ->
-            Box(Modifier.fillMaxWidth()) {
-                if (value.isEmpty() && placeholder.isNotBlank()) {
-                    Text(placeholder, fontSize = fontSizeSp.sp, color = textColor.copy(alpha = 0.5f))
+    Box(modifier = modifier) {
+        BasicTextField(
+            value = tfv,
+            onValueChange = { new: TextFieldValue ->
+                tfv = new
+                onValueChange(new.text)
+            },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 24.dp, max = 130.dp),
+            maxLines = maxLines,
+            textStyle = TextStyle(color = textColor, fontSize = fontSizeSp.sp, lineHeight = lineHeightSp.sp),
+            cursorBrush = SolidColor(cursorColor),
+            decorationBox = { inner: () -> Unit ->
+                Box(Modifier.fillMaxWidth()) {
+                    if (value.isEmpty() && placeholder.isNotBlank()) {
+                        Text(placeholder, fontSize = fontSizeSp.sp, color = textColor.copy(alpha = 0.5f))
+                    }
+                    inner()
                 }
-                inner()
+            }
+        )
+        // Overlay: чипсы поверх текста
+        val chips = remember(value) { extractChips(value) }
+        if (chips.isNotEmpty()) {
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp)
+            ) {
+                chips.forEach { chip ->
+                    Box(
+                        modifier = Modifier
+                            .padding(vertical = 1.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            "\uD83D\uDCCE " + chip,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
             }
         }
-    )
+    }
 }
 
 private val CHIP_REGEX = Regex("""\[Файл: ([^\]]+)\]\n```[^\n]*\n([\s\S]*?)\n```""")
 
-private fun buildChipAnnotated(text: String): AnnotatedString = buildAnnotatedString {
-    var last = 0
-    CHIP_REGEX.findAll(text).forEach { m ->
-        append(text.substring(last, m.range.first))
-        val name = m.groupValues[1]
-        val chipId = "chip_" + m.range.first
-        withStyle(SpanStyle(color = Color.Transparent)) {
-            appendInlineContent(chipId, "[" + name + "]")
-        }
-        last = m.range.last + 1
-    }
-    append(text.substring(last))
-}
-
-@Composable
-private fun buildInlineContent(text: String): Map<String, InlineTextContent> {
-    val map = mutableMapOf<String, InlineTextContent>()
-    CHIP_REGEX.findAll(text).forEach { m ->
-        val name = m.groupValues[1]
-        val chipId = "chip_" + m.range.first
-        val chipWidth = (name.length * 7 + 40).coerceIn(80, 320)
-        map[chipId] = InlineTextContent(
-            Placeholder(
-                width = chipWidth.sp,
-                height = 24.sp,
-                placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
-            )
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 6.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Text(
-                    "\uD83D\uDCCE " + name,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-    return map
+private fun extractChips(text: String): List<String> {
+    return CHIP_REGEX.findAll(text).map { it.groupValues[1] }.toList()
 }
