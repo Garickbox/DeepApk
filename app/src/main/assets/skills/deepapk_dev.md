@@ -5,14 +5,14 @@
 - `AndroidManifest.xml` — права (`INTERNET`, `RUN_COMMAND`, `REQUEST_INSTALL_PACKAGES`), `FileProvider`, фильтры `MAIN`, `SEND`/`SEND_MULTIPLE` и `VIEW` для `*.deepapk` (с `android:host="*"` + `android:pathSuffix=".deepapk"`).
 - `java/com/garickbox/deepapk/`:
   - `MainActivity.kt` — точка входа, тема (`DeepDarkColors`/`DeepLightColors`), роутинг `incomingShare` и `incomingSkill` (`.deepapk`).
-  - `ChatScreen.kt` — экран чата (~2300 строк), TopBar, лента `ChatFeedItem`, `startStream` (стриминг + авто-чтение SAF до 4 шагов + `skill_save`).
+  - `ChatScreen.kt` — экран чата (~2300 строк), TopBar, лента `ChatFeedItem`, `startStream` (стриминг + авто-чтение SAF до 8 шагов + `skill_save`).
   - `ChatDrawer.kt` — drawer сессий (`ChatDrawerSheet`, ~158 строк): поиск, список, удаление, кнопки настроек, баланс. **Вынесен из `ChatScreen.kt`.**
-  - `ChatHistory.kt` — `capHistory` + `MAX_HISTORY_CHARS = 150000`. **Вынесен из `ChatScreen.kt`.**
+  - `ChatHistory.kt` — `capHistory` + `MAX_HISTORY_CHARS = 500`. **Вынесен из `ChatScreen.kt`.**
   - `UserAttachments.kt` — `splitUserAttachments` (сворачивает `[Файл: ...]` и папку SAF в чипсы). **Вынесен из `ChatScreen.kt`.**
   - `ContextActions.kt` — `copyPlain`, `ContextMenuItem`, `ModePill`, `DeepWhaleLogo`. **Вынесен из `ChatScreen.kt`.**
   - `ProjectFs.kt` — доступ к папке проекта через SAF (`DocumentsContract`), `listTree`, `grepProject`, `readFileLines` (до 180 строк), транзакционный `applyWithBackup` / `commitBackupOk` / `rollbackBackup`.
   - `SkillPackage.kt` — формат `deepapk-skill-v1` (`.deepapk`), импорт из VIEW/SEND/диалога и экспорт через `FileProvider`.
-  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 8** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
+  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 9** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
   - `DocxEngine.kt` — генератор ГОСТ `.docx` из блока `doc_report` (OOXML ZIP, autofit-таблицы, svg в PNG, PAGE в колонтитуле, автосохранение HTML).
   - `MarkdownRenderer.kt` — парсер Markdown/кода/таблиц/doc_report, кнопки Termux, Открыть, Посмотреть, Скачать .docx.
   - `DeepSeekApi.kt`, `ChatStore.kt`, `SettingsStore.kt`, `SettingsScreen.kt`, `AttachmentHelper.kt`, `TermuxBridge.kt`, `UpdateChecker.kt`.
@@ -55,7 +55,7 @@
 ## 4. ЧАСТЫЕ ГРАБЛИ ПРОЕКТА (НЕ ПОВТОРЯТЬ)
 - В Kotlin-строках нельзя 8-значный юникод-эскейп (нужны суррогаты UTF-16 или живые UTF-8 эмодзи), не ставь лишний слэш перед uXXXX в UI-строках.
 - В DocxEngine.kt выравнивание абзаца строго `left` (не `both`).
-- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **8**).
+- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **9**).
 - В AndroidManifest.xml фильтр pathSuffix требует `android:host="*"`.
 - Не ломай imePadding / navigationBarsPadding, не используй continue внутри inline-лямбд (forEach), используй формат `[Файл: ...]` для сворачивания в чипс.
 - Если пользователь просит не писать код — отвечай без кода.

@@ -35,7 +35,7 @@ data class PromptPreset(
 object PresetStore {
     private val lock = Any()
     private const val PREF_NAME = "deepapk_presets_meta"
-    private const val CURRENT_VER = 8
+    private const val CURRENT_VER = 9
     private val CORE_IDS = setOf("default", "termux", "docx_report", "deepapk_dev")
     private val REMOVED_BUILTIN_IDS = setOf("patch_dev", "writer", "study", "translator", "concise")
 
@@ -121,12 +121,12 @@ object PresetStore {
                 val skillsById = parsed.associate { it.id to it.learnedSkill }
                 val out = mutableListOf<PromptPreset>()
                 freshDefaults.forEach { d ->
-                    out.add(d.copy(learnedSkill = skillsById[d.id].orEmpty()))
+                    out.add(d.copy(learnedSkill = sanitizeLearned(skillsById[d.id].orEmpty())))
                 }
                 parsed.forEach { p ->
                     val isOldRemoved = p.id in REMOVED_BUILTIN_IDS || p.isBuiltIn
                     if (p.id !in CORE_IDS && !isOldRemoved) {
-                        out.add(p.copy(isBuiltIn = false))
+                        out.add(p.copy(isBuiltIn = false, learnedSkill = sanitizeLearned(p.learnedSkill)))
                     }
                 }
                 saveLocked(ctx, out)
@@ -173,7 +173,7 @@ object PresetStore {
                     .put("name", p.name)
                     .put("emoji", p.emoji)
                     .put("prompt", p.prompt)
-                    .put("learnedSkill", p.learnedSkill)
+                    .put("learnedSkill", sanitizeLearned(p.learnedSkill))
                     .put("isBuiltIn", p.isBuiltIn)
             )
         }
@@ -185,4 +185,40 @@ object PresetStore {
             tmp.delete()
         }
     }
+
+
+/** Санитайзер learnedSkill: убирает обрывки старого промпта, дубли правил SAF, мусорные строки. Лимит 8000 симв. */
+internal fun sanitizeLearned(input: String): String {
+    if (input.isBlank()) return ""
+    val raw = input.replace("\r\n", "\n").split('\n').map { it.trim() }
+    val seen = mutableSetOf<String>()
+    val out = mutableListOf<String>()
+    val reBroken = Regex("^[•\\-]\\s*\\)+.*")
+    for (line in raw) {
+        if (line.isBlank()) continue
+        if (line.startsWith("##")) continue
+        if (line.startsWith("#")) continue
+        if (line.matches(reBroken)) continue
+        if (line.length < 15) continue
+        if (line.contains("краткое правило в 1-2 строк")) continue
+        if (line.contains("в файле** | ✅ |")) continue
+        if (line.contains("диалоги пресетов и бэкап")) continue
+        if (line.contains("-ChatScreen.kt-")) continue
+        if (line.contains("-ChatDrawer.kt-")) continue
+        if (line.contains("-ChatHistory.kt-")) continue
+        if (line.contains("-UserAttachments.kt-")) continue
+        if (line.contains("-ContextActions.kt-")) continue
+        val norm = if (line.startsWith("•") || line.startsWith("-")) line else "• $line"
+        if (seen.add(norm.lowercase())) out.add(norm)
+    }
+    val joined = out.joinToString("\n")
+    if (joined.length <= 8000) return joined
+    var acc = 0; var cut = 0
+    for (l in out) {
+        if (acc + l.length + 1 > 8000) break
+        acc += l.length + 1; cut++
+    }
+    return out.take(cut).joinToString("\n")
+}
+
 }
