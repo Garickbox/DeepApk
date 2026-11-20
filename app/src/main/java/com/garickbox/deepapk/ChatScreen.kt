@@ -75,7 +75,7 @@ private sealed class ChatFeedItem(val key: String) {
     data class AssistantFooter(val msgIdx: Int, val msg: Message) : ChatFeedItem("f_${msg.id}")
 }
 
-private data class TermuxRunnerState(
+internal data class TermuxRunnerState(
     val script: String,
     val interpreter: String,
     val running: Boolean = false,
@@ -1696,146 +1696,15 @@ fun ChatScreen(
 
     // Unified Termux Script Runner Dialog
     termuxRunner?.let { tr ->
-        val hasPerm = TermuxBridge.hasRunPermission(ctx)
-        Dialog(
-            onDismissRequest = { if (!tr.running) termuxRunner = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (isDark) Color(0xFF1F2229) else Color.White,
-                modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.86f)
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            if (tr.running) "⏳ Termux (${tr.elapsedSec}с)" else "▶ Termux",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf("bash", "python3").forEach { interp ->
-                                ModePill(
-                                    label = if (interp == "python3") "python" else "bash",
-                                    active = tr.interpreter == interp,
-                                    isDark = isDark,
-                                    onClick = {
-                                        if (!tr.running) termuxRunner = tr.copy(interpreter = interp)
-                                    }
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "✕",
-                            fontSize = 18.sp,
-                            modifier = Modifier.clickable {
-                                if (tr.running) tr.jobHandle?.requestCancel(ctx)
-                                termuxRunner = null
-                            }.padding(4.dp)
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = tr.script,
-                        onValueChange = { if (!tr.running) termuxRunner = tr.copy(script = it) },
-                        readOnly = tr.running,
-                        textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 17.sp),
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 90.dp, max = if (tr.running || tr.exitCode != null) 140.dp else 280.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    if (!hasPerm) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "⚠️ Нет разрешения RUN_COMMAND (Настройки → Termux → Прямой запуск команд).",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                    if (tr.statusLine.isNotBlank()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(tr.statusLine, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = DeepSeekBlue)
-                    }
-                    if (tr.running || tr.exitCode != null) {
-                        Spacer(Modifier.height(6.dp))
-                        val consoleText = if (tr.running) tr.liveTail.ifBlank { "Выполняется…" } else tr.resultBody
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isDark) Color(0xFF13151A) else Color(0xFFF3F5F8),
-                            modifier = Modifier.weight(1f).fillMaxWidth()
-                        ) {
-                            Text(
-                                text = consoleText,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.5.sp,
-                                lineHeight = 16.sp,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
-                                    .padding(10.dp)
-                            )
-                        }
-                    } else {
-                        Spacer(Modifier.weight(1f))
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    if (tr.running) {
-                        Button(
-                            onClick = { tr.jobHandle?.requestCancel(ctx) },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
-                        ) { Text("⏹ Остановить") }
-                    } else if (tr.exitCode != null) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                            OutlinedButton(
-                                onClick = { copyPlain(ctx, tr.resultBody, "Вывод скопирован") },
-                                shape = RoundedCornerShape(12.dp)
-                            ) { Text("❐") }
-                            OutlinedButton(
-                                onClick = { startTermuxRunner(tr) },
-                                shape = RoundedCornerShape(12.dp)
-                            ) { Text("↻") }
-                            Button(
-                                onClick = {
-                                    val icon = if (tr.exitCode == 0) "\u2705" else "\u26A0\uFE0F"
-                                    val tag = if (tr.interpreter == "python3") "python" else "bash"
-                                    val txt = tr.resultBody.trim().ifBlank { "(пусто)" }
-                                    val sizeLbl = if (txt.length >= 1024) "${txt.length / 1024} КБ" else "${txt.length} симв."
-                                    attachments.add(
-                                        AttachedFile(
-                                            name = "\uD83D\uDCBB $tag $icon exit=${tr.exitCode} \u00B7 ${tr.durationSec}с",
-                                            sizeLabel = sizeLbl,
-                                            content = txt
-                                        )
-                                    )
-                                    termuxRunner = null
-                                },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp)
-                            ) { Text("📎 В чат") }
-                        }
-                    } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                            OutlinedButton(
-                                onClick = {
-                                    TermuxBridge.sendCodeToTermux(ctx, tr.interpreter, tr.script)
-                                    termuxRunner = null
-                                },
-                                shape = RoundedCornerShape(12.dp)
-                            ) { Text("📤 Файлом") }
-                            Button(
-                                onClick = { startTermuxRunner(tr) },
-                                enabled = hasPerm,
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp)
-                            ) { Text("▶ Запустить") }
-                        }
-                    }
-                }
-            }
-        }
+        TermuxRunnerDialog(
+            tr = tr,
+            isDark = isDark,
+            hasPerm = TermuxBridge.hasRunPermission(ctx),
+            onUpdate = { st -> termuxRunner = st },
+            onStart = { st -> startTermuxRunner(st) },
+            onAddAttachment = { att -> attachments.add(att) },
+            onDismiss = { termuxRunner = null }
+        )
     }
 
     // Presets picker dialog
