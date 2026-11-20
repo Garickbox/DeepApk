@@ -2095,45 +2095,26 @@ fun ChatScreen(
     }
 
     if (showProjectFsDialog) {
-        Dialog(onDismissRequest = { showProjectFsDialog = false }) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (isDark) Color(0xFF1F2229) else Color.White,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("📂 Проект SAF: $projectLabel", fontSize = 16.5.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        Text("Авто-чтение кода для ИИ", fontSize = 14.sp, modifier = Modifier.weight(1f))
-                        Switch(
-                            checked = projectAutoRead,
-                            onCheckedChange = {
-                                projectAutoRead = it
-                                ProjectFs.setEnabled(ctx, it)
-                            }
-                        )
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = {
-                                showProjectFsDialog = false
-                                treePicker.launch(null)
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
-                        ) { Text("Сменить папку", fontSize = 12.5.sp) }
-                        TextButton(onClick = {
-                            ProjectFs.clearTree(ctx)
-                            projectLabel = ""
-                            projectAutoRead = false
-                            showProjectFsDialog = false
-                        }) { Text("Отключить", color = Color(0xFFE53935), fontSize = 12.5.sp) }
-                    }
-                }
+        ProjectFsDialog(
+            projectLabel = projectLabel,
+            projectAutoRead = projectAutoRead,
+            isDark = isDark,
+            onDismiss = { showProjectFsDialog = false },
+            onToggleAutoRead = { v ->
+                projectAutoRead = v
+                ProjectFs.setEnabled(ctx, v)
+            },
+            onChangeFolder = {
+                showProjectFsDialog = false
+                treePicker.launch(null)
+            },
+            onClear = {
+                ProjectFs.clearTree(ctx)
+                projectLabel = ""
+                projectAutoRead = false
+                showProjectFsDialog = false
             }
-        }
+        )
     }
 
     // Incoming .deepapk Skill Package Installer Dialog
@@ -2352,51 +2333,19 @@ fun ChatScreen(
 
     // Add selected/copied message rule to preset
     addSkillDraft?.let { initial ->
-        var ruleText by remember(initial) { mutableStateOf(initial) }
-        var targetId by remember(initial) {
-            mutableStateOf(if (activePresetId == "default") "termux" else activePresetId)
-        }
-        Dialog(onDismissRequest = { addSkillDraft = null }) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (isDark) Color(0xFF1F2229) else Color.White,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Добавить правило в заготовку", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        presets.filter { it.id != "default" }.forEach { p ->
-                            ModePill(
-                                label = "${p.emoji} ${p.name}",
-                                active = targetId == p.id,
-                                isDark = isDark,
-                                onClick = { targetId = p.id }
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = ruleText,
-                        onValueChange = { ruleText = it },
-                        label = { Text("Текст правила") },
-                        minLines = 3,
-                        maxLines = 6,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = { addSkillDraft = null }) { Text("Отмена") }
-                        Button(onClick = {
-                            PresetStore.appendSkill(ctx, targetId, ruleText)
-                            presets = PresetStore.load(ctx)
-                            Toast.makeText(ctx, "Добавлено в заготовку", Toast.LENGTH_SHORT).show()
-                            addSkillDraft = null
-                        }) { Text("Сохранить") }
-                    }
-                }
+        SkillRuleDialog(
+            initial = initial,
+            isDark = isDark,
+            presets = presets,
+            activePresetId = activePresetId,
+            onDismiss = { addSkillDraft = null },
+            onSave = { targetId, text ->
+                PresetStore.appendSkill(ctx, targetId, text)
+                presets = PresetStore.load(ctx)
+                Toast.makeText(ctx, "Добавлено в заготовку", Toast.LENGTH_SHORT).show()
+                addSkillDraft = null
             }
-        }
+        )
     }
 
     val ocrPdfPicker = rememberLauncherForActivityResult(
