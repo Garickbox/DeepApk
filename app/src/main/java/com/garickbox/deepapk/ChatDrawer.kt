@@ -163,7 +163,7 @@ internal fun ChatDrawerSheet(
                                 .padding(horizontal = 6.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            DeepWhaleLogo(sizeDp = 34, isGemini = settings.provider == "gemini")
+                            DeepWhaleLogo(sizeDp = 34)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text("DeepApk · ${BuildConfig.VERSION_NAME}", fontSize = 14.sp, fontWeight = FontWeight.Medium)

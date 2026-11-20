@@ -920,7 +920,7 @@ fun ChatScreen(
                             verticalArrangement = Arrangement.Center,
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            DeepWhaleLogo(sizeDp = 56, isGemini = settings.provider == "gemini", cornerDp = 16)
+                            DeepWhaleLogo(sizeDp = 56, cornerDp = 16)
                             Spacer(Modifier.height(14.dp))
                             Text(
                                 "Привет! Я ${settings.providerLabel()}",

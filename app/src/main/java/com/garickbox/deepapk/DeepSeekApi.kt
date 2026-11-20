@@ -158,6 +158,7 @@ object DeepSeekApi {
                         if (isActive && !done) { if (!gotC && gotR) { trySend(StreamEvent.Done(lastUsage, true)); trySend(StreamEvent.Error("Рассуждения оборвались — нажми «⏭ Продолжить»")) } else if (!gotC) trySend(StreamEvent.Error("Соединение закрыто без ответа")) else trySend(StreamEvent.Done(lastUsage, truncated)) }
                     }
                 }
+                Unit
             }
         } catch (_: SocketTimeoutException) {
             if (isActive) trySend(StreamEvent.Error("Таймаут ответа сервера (120с)"))

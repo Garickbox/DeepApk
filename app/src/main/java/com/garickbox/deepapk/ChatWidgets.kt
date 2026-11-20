@@ -84,7 +84,7 @@ internal fun ModePill(
 }
 
 @Composable
-internal fun DeepWhaleLogo(sizeDp: Int, isGemini: Boolean, cornerDp: Int = sizeDp / 2) {
+internal fun DeepWhaleLogo(sizeDp: Int, cornerDp: Int = sizeDp / 2) {
     Box(
         modifier = Modifier
             .size(sizeDp.dp)
@@ -92,9 +92,6 @@ internal fun DeepWhaleLogo(sizeDp: Int, isGemini: Boolean, cornerDp: Int = sizeD
             .background(DeepSeekBlue),
         contentAlignment = Alignment.Center
     ) {
-        if (isGemini) {
-            Text("✦", color = Color.White, fontSize = (sizeDp * 0.42f).sp, fontWeight = FontWeight.Bold)
-        } else {
             Canvas(Modifier.size((sizeDp * 0.72f).dp)) {
                 val w = size.width
                 val h = size.height
@@ -129,6 +126,5 @@ internal fun DeepWhaleLogo(sizeDp: Int, isGemini: Boolean, cornerDp: Int = sizeD
                     cap = StrokeCap.Round
                 )
             }
-        }
     }
 }

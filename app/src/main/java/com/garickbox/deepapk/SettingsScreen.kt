@@ -169,14 +169,14 @@ fun SettingsScreen(
                 SettingsRow(
                     icon = "🎛",
                     title = "Параметры (код / текст)",
-                    value = "T=${"%.1f".format(draft.temperature)} (${if (draft.temperature <= 0.35f) "Код" else if (draft.temperature <= 0.85f) "Баланс" else "Текст"}) · ${draft.maxTokens / 1024}K",
+                    value = (if (draft.thinkingEnabled) "Think" else "T=${"%.1f".format(draft.temperature)}") + " · ${draft.maxTokens / 1024}K",
                     onClick = { showParamsDialog = true }
                 )
                 HorizontalDivider(color = dividerCol)
                 SettingsRow(
                     icon = "✎",
                     title = "Персонализация",
-                    value = draft.systemPrompt.take(16) + "…",
+                    value = if (draft.systemPrompt.trim() == AppSettings.DEFAULT_SYSTEM_PROMPT.trim()) "По умолчанию" else draft.systemPrompt.take(18) + "…",
                     onClick = { showPromptDialog = true }
                 )
             }
