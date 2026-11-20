@@ -12,7 +12,7 @@
   - `ContextActions.kt` — `copyPlain`, `ContextMenuItem`, `ModePill`, `DeepWhaleLogo`. **Вынесен из `ChatScreen.kt`.**
   - `ProjectFs.kt` — доступ к папке проекта через SAF (`DocumentsContract`), `listTree`, `grepProject`, `readFileLines` (до 180 строк), транзакционный `applyWithBackup` / `commitBackupOk` / `rollbackBackup`.
   - `SkillPackage.kt` — формат `deepapk-skill-v1` (`.deepapk`), импорт из VIEW/SEND/диалога и экспорт через `FileProvider`.
-  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 9** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
+  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 11** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
   - `DocxEngine.kt` — генератор ГОСТ `.docx` из блока `doc_report` (OOXML ZIP, autofit-таблицы, svg в PNG, PAGE в колонтитуле, автосохранение HTML).
   - `MarkdownRenderer.kt` — парсер Markdown/кода/таблиц/doc_report, кнопки Termux, Открыть, Посмотреть, Скачать .docx.
   - `DeepSeekApi.kt`, `ChatStore.kt`, `SettingsStore.kt`, `SettingsScreen.kt`, `AttachmentHelper.kt`, `TermuxBridge.kt`, `UpdateChecker.kt`.
@@ -52,10 +52,45 @@
   3. В Python — raw-строки через тройные кавычки (чтобы escape U/u не ломал текст), проверка `assert cnt == expected`, не писать литеральные тройные бэктики внутри bash-блоков (использовать `BT3 = chr(96) * 3`).
   4. Бэкап в `~/deep_tmp/bak_$$` до правок; если deepapk_guard.py + deep_build.sh зелёные — удаляй бэкап; если промах — автооткат без commit/push.
 
+## 3.5. КОГДА ИСПОЛЬЗОВАТЬ ```bash (и другие языки)
+
+**Правило:** кнопка `▶ Termux` появляется на **каждом** блоке ```bash / ```sh / ```python.
+Значит эти блоки — **только для скриптов, которые надо выполнить**.
+
+| Что пишешь | Язык блока |
+|---|---|
+| Скрипт для запуска (bash/python) | ```bash / ```python |
+| Пример кода (не для запуска) | ```text |
+| Фрагмент (одна строка, часть) | ```text |
+| Команда для ручного ввода в Termux | ```bash (это команда, её можно выполнить) |
+| Вывод скрипта (результат) | ```text |
+| Конфиг (yaml/json/toml) | ```yaml / ```json / ```toml |
+| Kotlin/Java/JS код | ```kotlin / ```java / ```js |
+
+**Плохо** (пример, не для запуска → ▶ Termux зря):
+```bash
+echo "hello"
+```
+
+**Хорошо** (пример, только Копировать):
+```text
+echo "hello"
+```
+
+**Хорошо** (скрипт, ▶ Termux уместен):
+```bash
+#!/bin/bash
+date
+uname
+uptime
+```
+
+**Правило простое:** если пользователь может тапнуть `▶ Termux` и это **имеет смысл** — пиши ```bash. Если это **иллюстрация** — пиши ```text.
+
 ## 4. ЧАСТЫЕ ГРАБЛИ ПРОЕКТА (НЕ ПОВТОРЯТЬ)
 - В Kotlin-строках нельзя 8-значный юникод-эскейп (нужны суррогаты UTF-16 или живые UTF-8 эмодзи), не ставь лишний слэш перед uXXXX в UI-строках.
 - В DocxEngine.kt выравнивание абзаца строго `left` (не `both`).
-- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **9**).
+- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **11**).
 - В AndroidManifest.xml фильтр pathSuffix требует `android:host="*"`.
 - Не ломай imePadding / navigationBarsPadding, не используй continue внутри inline-лямбд (forEach), используй формат `[Файл: ...]` для сворачивания в чипс.
 - Если пользователь просит не писать код — отвечай без кода.
