@@ -702,8 +702,10 @@ internal fun isPlaceholderPath(input: String): Boolean {
     if (s.all { it == '.' || it == '\u2026' || it == '*' || it == '?' || it == '_' }) return true
     return false
 
-
 // ===== Termux run =====
+
+}
+
 data class TermuxCmd(val cmd: String, val rangeStart: Int)
 
 fun extractTermuxCmds(raw: String): List<TermuxCmd> {
@@ -721,7 +723,3 @@ fun extractTermuxCmds(raw: String): List<TermuxCmd> {
 fun stripTermuxTags(input: String): String =
     input.replace(Regex("""<termux_run\b[^>]*?(?:/>|>[\s\S]*?</termux_run>)""",
         RegexOption.IGNORE_CASE), "")
-
-
-}
-
