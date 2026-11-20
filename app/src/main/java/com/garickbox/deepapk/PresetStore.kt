@@ -152,14 +152,14 @@ object PresetStore {
     }
 
     fun appendSkill(ctx: Context, presetId: String, rule: String) = synchronized(lock) {
-        val clean = rule.trim()
-        if (clean.isBlank()) return@synchronized
+        val clean = rule.trim().replace(Regex("\\s+")," ").take(280); if (clean.isBlank()) return@synchronized
         val list = load(ctx)
         val idx = list.indexOfFirst { it.id == presetId }
         if (idx >= 0) {
-            val cur = list[idx]
-            val combined = if (cur.learnedSkill.isBlank()) "• $clean" else "${cur.learnedSkill.trim()}\n• $clean"
-            list[idx] = cur.copy(learnedSkill = combined)
+            val cur=list[idx]; val ls=cur.learnedSkill.lines().map{it.trim()}.filter{it.isNotBlank()}.toMutableList()
+            if(ls.any{it.removePrefix("•").trim().equals(clean,true)}) return@synchronized
+            ls.add("• $clean"); while(ls.size>20||ls.joinToString("\n").length>3000)ls.removeAt(0)
+            list[idx]=cur.copy(learnedSkill=ls.joinToString("\n"))
             saveLocked(ctx, list)
         }
     }

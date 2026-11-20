@@ -626,7 +626,7 @@ fun ChatScreen(
         val pm = ModelCatalog.findProvider(settings.provider)
         Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.size(56.dp).clip(RoundedCornerShape(16.dp)).background(DeepSeekBlue), contentAlignment = Alignment.Center) {
-                Text(settings.providerShort().take(2), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(settings.providerShort().take(2).trim(), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(14.dp))
             Text(pm.title, fontSize = 21.sp, fontWeight = FontWeight.Bold)
@@ -1471,7 +1471,7 @@ fun ChatScreen(
                                 SettingsStore.save(ctx, updated)
                             }
                         )
-                        if (settings.provider == "deepseek") {
+                        if (settings.provider in listOf("deepseek", "gemini")) {
                         Spacer(Modifier.width(8.dp))
                         ModePill(
                             label = "🌐 Поиск",
@@ -2413,8 +2413,8 @@ fun ChatScreen(
     if (showOcrBaseDialog) {
         var reloadKey by remember { mutableStateOf(0) }
         var confirmClear by remember { mutableStateOf(false) }
-        val ocrStats = remember(reloadKey, ocrRefreshKey) { OcrCache.stats(ctx) }
-        val ocrList = remember(reloadKey, ocrRefreshKey) { OcrCache.list(ctx) }
+        var ocrStats by remember{mutableStateOf(OcrCache.Stats(0,0,0L,false))};var ocrList by remember{mutableStateOf<List<OcrCache.Entry>>(emptyList())}
+        LaunchedEffect(reloadKey,ocrRefreshKey){ocrStats=withContext(Dispatchers.IO){OcrCache.stats(ctx)};ocrList=withContext(Dispatchers.IO){OcrCache.list(ctx)}}
         AlertDialog(
             onDismissRequest = { showOcrBaseDialog = false; confirmClear = false },
             title = { Text("📚 База OCR", fontSize = 17.sp, fontWeight = FontWeight.SemiBold) },
@@ -2479,8 +2479,7 @@ fun ChatScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier
                                         .clickable {
-                                            OcrCache.deleteOne(ctx, e.hash)
-                                            reloadKey++
+                                            scope.launch(Dispatchers.IO){OcrCache.deleteOne(ctx,e.hash);withContext(Dispatchers.Main){reloadKey++}}
                                         }
                                         .padding(start = 10.dp, top = 4.dp, bottom = 4.dp)
                                 )
@@ -2503,9 +2502,7 @@ fun ChatScreen(
                         if (confirmClear) {
                             Button(
                                 onClick = {
-                                    OcrCache.clear(ctx)
-                                    confirmClear = false
-                                    reloadKey++
+                                    scope.launch(Dispatchers.IO){OcrCache.clear(ctx);withContext(Dispatchers.Main){confirmClear=false;reloadKey++}}
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
                             ) { Text("Удалить всё") }

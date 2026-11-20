@@ -20,7 +20,7 @@ sealed class SafReadResult {
  */
 object ChatSafController {
     const val SAF_READ_TIMEOUT_MS = 180_000L
-    const val SAF_MAX_TOOL_DEPTH = 4
+    const val SAF_MAX_TOOL_DEPTH = 8
 
     private const val MSG_SECURITY =
         "> 🔒 Доступ к папке проекта отозван или изменился. Переподключи папку через чип SAF в шапке и повтори."

@@ -17,6 +17,7 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.SocketTimeoutException
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 sealed class StreamEvent {
@@ -76,6 +77,7 @@ object DeepSeekApi {
             .map { if (it.role == "assistant" && it.content.isBlank()) it.copy(content = "[обрыв]") else it }.toMutableList()
         if (continuation) prepared.add(Message(role = "user", content = if (prepared.lastOrNull()?.content == "[обрыв]") "Рассуждения оборвались. Сразу выдай ответ." else "Продолжи с места обрыва."))
         callRef = when (settings.provider) {
+            "gemini" -> streamGemini(settings, prepared)
             "custom" -> { val b = settings.customBaseUrl.trim().trimEnd('/'); streamOpenAiCompat(settings, prepared, if (b.endsWith("/chat/completions")) b else "$b/chat/completions", settings.customApiKey, settings.customModel, false) }
             else -> streamOpenAiCompat(settings, prepared, "https://api.deepseek.com/chat/completions", settings.apiKey, settings.model, true)
         }
@@ -95,7 +97,7 @@ object DeepSeekApi {
         history.forEach { arr.put(JSONObject().put("role", it.role).put("content", it.content)) }
         val root = JSONObject().put("model", modelName.ifBlank { "deepseek/deepseek-v4.1-flash-1017" }).put("messages", arr).put("stream", true)
             .put("max_tokens", settings.maxTokens).put("stream_options", JSONObject().put("include_usage", true))
-            .put("thinking", JSONObject().put("type", if (settings.thinkingEnabled) "enabled" else "disabled"))
+            .let{if(!isDirect&&modelName.contains("gemini",true))it.put("reasoning_effort",if(settings.thinkingEnabled)"high"else"low")else it.put("thinking",JSONObject().put("type",if(settings.thinkingEnabled)"enabled"else"disabled"))}
         if (!settings.thinkingEnabled) root.put("temperature", settings.temperature.toDouble())
         if (isDirect && settings.webSearchEnabled) root.put("tools", JSONArray().put(JSONObject().put("type", "deepseek_web_search")).put(JSONObject().put("type", "deepseek_read_url")))
         val req = Request.Builder().url(endpointUrl).header("Authorization", "Bearer $key").header("Content-Type", "application/json").post(root.toString().toRequestBody("application/json".toMediaType())).build()
@@ -169,6 +171,75 @@ object DeepSeekApi {
         }
         return call
     }
+    private fun ProducerScope<StreamEvent>.emitEnd(gotC: Boolean, gotR: Boolean, u: String, tr: Boolean) {
+        if (!gotC && gotR) { trySend(StreamEvent.Done(u, true)); trySend(StreamEvent.Error("Рассуждения оборвались — нажми «⏭ Продолжить»")) }
+        else if (!gotC) trySend(StreamEvent.Error("Соединение закрыто без ответа"))
+        else trySend(StreamEvent.Done(u, tr))
+    }
+
+    private fun ProducerScope<StreamEvent>.streamGemini(st: AppSettings, hist: List<Message>): Call? {
+        val key = st.geminiApiKey.trim()
+        if (key.isBlank()) { trySend(StreamEvent.Error("Не задан API-ключ (Google Gemini)")); return null }
+        val mdl = st.geminiModel.trim().ifBlank { "gemini-4-hydrogen" }
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/${URLEncoder.encode(mdl, "UTF-8")}:streamGenerateContent?alt=sse"
+        val cts = JSONArray()
+        hist.forEach { m ->
+            val r = if (m.role == "assistant") "model" else "user"
+            val l = if (cts.length() > 0) cts.getJSONObject(cts.length() - 1) else null
+            if (l != null && l.optString("role") == r) l.getJSONArray("parts").put(JSONObject().put("text", m.content))
+            else cts.put(JSONObject().put("role", r).put("parts", JSONArray().put(JSONObject().put("text", m.content))))
+        }
+        val gen = JSONObject().put("maxOutputTokens", st.maxTokens)
+        if (!st.thinkingEnabled) gen.put("temperature", st.temperature.toDouble())
+        val tc = JSONObject().put("includeThoughts", st.thinkingEnabled)
+        if (mdl.startsWith("gemini-2.5")) tc.put("thinkingBudget", if (st.thinkingEnabled) 8192 else 0)
+        else tc.put("thinkingLevel", if (st.thinkingEnabled) "high" else "low")
+        val root = JSONObject().put("contents", cts).put("generationConfig", gen.put("thinkingConfig", tc))
+        if (st.systemPrompt.isNotBlank()) root.put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", st.systemPrompt))))
+        if (st.webSearchEnabled) root.put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+        val req = Request.Builder().url(url).header("x-goog-api-key", key).header("Content-Type", "application/json").post(root.toString().toRequestBody("application/json".toMediaType())).build()
+        val call = client.newCall(req)
+        var lu = ""; var tr = false; var gotC = false; var gotR = false; var done = false; var sc = 0
+        try {
+            call.execute().use { resp ->
+                if (!resp.isSuccessful) trySend(StreamEvent.Error("Gemini ${resp.code}: ${resp.body?.string()?.take(800) ?: ""}"))
+                else resp.body?.byteStream()?.let { sm ->
+                    BufferedReader(InputStreamReader(sm)).use { r ->
+                        while (isActive) {
+                            val ln = (r.readLine() ?: break).trim()
+                            if (!ln.startsWith("data: ")) continue
+                            val j = ln.removePrefix("data: ").trim(); if (j == "[DONE]") break
+                            try {
+                                val o = JSONObject(j)
+                                val eo = o.optJSONObject("error")
+                                if (eo != null) { done = true; trySend(StreamEvent.Error(eo.optString("message", "Gemini API error"))); break }
+                                o.optJSONObject("usageMetadata")?.let { u ->
+                                    val p0 = u.optInt("promptTokenCount", 0)
+                                    val c0 = u.optInt("candidatesTokenCount", 0) + u.optInt("thoughtsTokenCount", 0)
+                                    val h0 = u.optInt("cachedContentTokenCount", 0)
+                                    if (p0 > 0 || c0 > 0) lu = "↑$p0${if (p0 > 0 && h0 > 0) " ⚡${h0 * 100 / p0}%" else ""} ↓$c0"
+                                }
+                                val cnd = o.optJSONArray("candidates")?.optJSONObject(0) ?: continue
+                                if (cnd.optString("finishReason") == "MAX_TOKENS") tr = true
+                                cnd.optJSONObject("groundingMetadata")?.optJSONArray("webSearchQueries")?.let { q -> if (q.length() > sc) { sc = q.length(); trySend(StreamEvent.SearchInfo(sc)) } }
+                                val pts = cnd.optJSONObject("content")?.optJSONArray("parts") ?: continue
+                                for (i in 0 until pts.length()) {
+                                    val pt = pts.optJSONObject(i) ?: continue
+                                    val tx = pt.optString("text", "")
+                                    if (tx.isNotEmpty()) { if (pt.optBoolean("thought", false)) { gotR = true; trySend(StreamEvent.Reasoning(tx)) } else { gotC = true; trySend(StreamEvent.Content(tx)) } }
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    }
+                    if (isActive && !done) emitEnd(gotC, gotR, lu, tr)
+                } ?: trySend(StreamEvent.Error("Пустой ответ сервера"))
+                Unit
+            }
+        } catch (_: SocketTimeoutException) { if (isActive) trySend(StreamEvent.Error("Таймаут ответа сервера (120с)")) }
+        catch (e: Exception) { if (isActive) trySend(StreamEvent.Error(e.message ?: "unknown")) }
+        return call
+    }
+
 
 
 }

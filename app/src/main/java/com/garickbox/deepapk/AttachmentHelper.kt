@@ -166,7 +166,7 @@ internal suspend fun ocrPdf(
             val pages = total.coerceAtMost(maxPages)
             val sb = StringBuilder()
             val fileHash = OcrCache.fileHash(ctx, uri)
-            val origName = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "pdf"
+            val origName = runCatching{ctx.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use{c->if(c.moveToFirst())c.getString(0)else null}}.getOrNull()?.takeIf{it.isNotBlank()}?:uri.lastPathSegment?.substringAfterLast('/')?.takeIf{it.isNotBlank()}?:"pdf"
             Log.d("OCR", "ocrPdf: hash=${fileHash?.take(12)} name=$origName")
             tess.setPageSegMode(TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK)
             tess.setVariable("user_defined_dpi", "300")
