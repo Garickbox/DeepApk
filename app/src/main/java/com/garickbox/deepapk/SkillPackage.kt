@@ -32,6 +32,44 @@ private fun queryUriDisplayName(ctx: Context, uri: Uri): String {
     return uri.lastPathSegment?.substringAfterLast('/').orEmpty()
 }
 
+internal fun skillFormatMatches(fields: Map<String, String>, isDeepExt: Boolean): Boolean {
+    val fmt = fields["format"].orEmpty()
+    return fmt == "deepapk-skill-v1" || (isDeepExt && fields.containsKey("prompt"))
+}
+
+internal fun parseSkillFromFields(fields: Map<String, String>, fileName: String): SkillPackage? {
+    val prompt = fields["prompt"].orEmpty().trim()
+    if (prompt.isBlank()) return null
+    val rawBase = fileName.substringBeforeLast('.').ifBlank { "skill" }
+    val rawId = fields["id"].orEmpty().trim().ifBlank { rawBase }
+    val cleanId = rawId.lowercase().replace(Regex("[^a-z0-9_]+"), "_").trim('_')
+        .ifBlank { "custom_${System.currentTimeMillis()}" }
+    return SkillPackage(
+        id = cleanId,
+        name = fields["name"].orEmpty().trim().ifBlank { rawBase },
+        emoji = fields["emoji"].orEmpty().trim().ifBlank { "🛠" }.take(4),
+        prompt = prompt,
+        learnedSkill = fields["learnedSkill"].orEmpty().trim(),
+        version = fields["version"]?.toIntOrNull() ?: 1,
+        fileName = fileName
+    )
+}
+
+internal fun parseSkillFromDeepapkBody(text: String, fileName: String): SkillPackage? {
+    if (!fileName.endsWith(".deepapk", ignoreCase = true)) return null
+    val base = fileName.substringBeforeLast('.').ifBlank { "Новый скилл" }
+    val cleanId = base.lowercase().replace(Regex("[^a-z0-9_]+"), "_").trim('_')
+        .ifBlank { "custom_${System.currentTimeMillis()}" }
+    return SkillPackage(
+        id = cleanId,
+        name = base,
+        emoji = "⭐",
+        prompt = text.trim(),
+        version = 1,
+        fileName = fileName
+    )
+}
+
 fun parseSkillJsonOrText(rawText: String, fileName: String = ""): SkillPackage? {
     val trimmed = rawText.trim()
     if (trimmed.isBlank()) return null
@@ -39,40 +77,16 @@ fun parseSkillJsonOrText(rawText: String, fileName: String = ""): SkillPackage? 
     if (trimmed.startsWith("{")) {
         try {
             val o = JSONObject(trimmed)
-            val fmt = o.optString("format")
-            if (fmt == "deepapk-skill-v1" || (isDeepExt && o.has("prompt"))) {
-                val prompt = o.optString("prompt").trim()
-                if (prompt.isBlank()) return null
-                val rawBase = fileName.substringBeforeLast('.').ifBlank { "skill" }
-                val rawId = o.optString("id").trim().ifBlank { rawBase }
-                val cleanId = rawId.lowercase().replace(Regex("[^a-z0-9_]+"), "_").trim('_')
-                    .ifBlank { "custom_${System.currentTimeMillis()}" }
-                return SkillPackage(
-                    id = cleanId,
-                    name = o.optString("name").trim().ifBlank { rawBase },
-                    emoji = o.optString("emoji").trim().ifBlank { "🛠" }.take(4),
-                    prompt = prompt,
-                    learnedSkill = o.optString("learnedSkill").trim(),
-                    version = o.optInt("version", 1),
-                    fileName = fileName
-                )
+            val fields = mutableMapOf<String, String>()
+            for (k in listOf("format", "prompt", "id", "name", "emoji", "learnedSkill", "version")) {
+                if (o.has(k)) fields[k] = o.optString(k, "")
+            }
+            if (skillFormatMatches(fields, isDeepExt)) {
+                return parseSkillFromFields(fields, fileName)
             }
         } catch (_: Exception) {}
     }
-    if (isDeepExt) {
-        val base = fileName.substringBeforeLast('.').ifBlank { "Новый скилл" }
-        val cleanId = base.lowercase().replace(Regex("[^a-z0-9_]+"), "_").trim('_')
-            .ifBlank { "custom_${System.currentTimeMillis()}" }
-        return SkillPackage(
-            id = cleanId,
-            name = base,
-            emoji = "⭐",
-            prompt = trimmed,
-            version = 1,
-            fileName = fileName
-        )
-    }
-    return null
+    return parseSkillFromDeepapkBody(trimmed, fileName)
 }
 
 @Suppress("DEPRECATION")
