@@ -16,6 +16,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 
 sealed class StreamEvent {
@@ -100,7 +101,7 @@ object DeepSeekApi {
         val req = Request.Builder().url(endpointUrl).header("Authorization", "Bearer $key").header("Content-Type", "application/json").post(root.toString().toRequestBody("application/json".toMediaType())).build()
         val call = client.newCall(req)
         var lastUsage = ""
-        var truncated = false
+        var truncated = false; var gotC = false; var gotR = false; var done = false
         try {
             call.execute().use { resp ->
                 if (!resp.isSuccessful) {
@@ -118,15 +119,15 @@ object DeepSeekApi {
                                 if (!l.startsWith("data: ")) continue
                                 val json = l.removePrefix("data: ").trim()
                                 if (json == "[DONE]") {
-                                    trySend(StreamEvent.Done(lastUsage, truncated))
+                                    done = true
+                                    if (!gotC && gotR) { trySend(StreamEvent.Done(lastUsage, true)); trySend(StreamEvent.Error("Рассуждения оборвались — нажми «⏭ Продолжить»")) } else if (!gotC) trySend(StreamEvent.Error("Соединение закрыто без ответа")) else trySend(StreamEvent.Done(lastUsage, truncated))
                                     break
                                 }
                                 try {
                                     val obj = JSONObject(json)
                                     val errObj = obj.optJSONObject("error")
                                     if (errObj != null) {
-                                        trySend(StreamEvent.Error(errObj.optString("message", "API error")))
-                                        break
+                                        done = true; trySend(StreamEvent.Error(errObj.optString("message", "API error"))); break
                                     }
                                     val usage = obj.optJSONObject("usage")
                                     if (usage != null) {
@@ -135,9 +136,8 @@ object DeepSeekApi {
                                         if (searches > 0) trySend(StreamEvent.SearchInfo(searches))
                                         val pTok = usage.optInt("prompt_tokens", 0)
                                         val cTok = usage.optInt("completion_tokens", 0)
-                                        if (pTok > 0 || cTok > 0) {
-                                            lastUsage = "↑$pTok ↓$cTok"
-                                        }
+                                        val hit = usage.optInt("prompt_cache_hit_tokens", -1).let { if (it >= 0) it else usage.optJSONObject("prompt_tokens_details")?.optInt("cached_tokens", 0) ?: 0 }
+                                        if (pTok > 0 || cTok > 0) lastUsage = "↑$pTok${if (pTok > 0 && hit > 0) " ⚡${hit * 100 / pTok}%" else ""} ↓$cTok"
                                     }
                                     val choice = obj.optJSONArray("choices")?.optJSONObject(0) ?: continue
                                     val finishReason = choice.optString("finish_reason", "")
@@ -145,19 +145,22 @@ object DeepSeekApi {
                                     val delta = choice.optJSONObject("delta") ?: continue
                                     val reasoning = delta.optString("reasoning_content", "").ifBlank { delta.optString("reasoning", "") }
                                     if (reasoning.isNotEmpty() && reasoning != "null") {
-                                        trySend(StreamEvent.Reasoning(reasoning))
+                                        gotR = true; trySend(StreamEvent.Reasoning(reasoning))
                                     }
                                     val content = delta.optString("content", "")
                                     if (content.isNotEmpty() && content != "null") {
-                                        trySend(StreamEvent.Content(content))
+                                        gotC = true; trySend(StreamEvent.Content(content))
                                     }
                                 } catch (_: Exception) {
                                 }
                             }
                         }
+                        if (isActive && !done) { if (!gotC && gotR) { trySend(StreamEvent.Done(lastUsage, true)); trySend(StreamEvent.Error("Рассуждения оборвались — нажми «⏭ Продолжить»")) } else if (!gotC) trySend(StreamEvent.Error("Соединение закрыто без ответа")) else trySend(StreamEvent.Done(lastUsage, truncated)) }
                     }
                 }
             }
+        } catch (_: SocketTimeoutException) {
+            if (isActive) trySend(StreamEvent.Error("Таймаут ответа сервера (120с)"))
         } catch (e: Exception) {
             if (isActive) {
                 trySend(StreamEvent.Error(e.message ?: "unknown"))
