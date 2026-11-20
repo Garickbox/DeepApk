@@ -52,6 +52,11 @@ fun SettingsScreen(
     var showThemeDialog by remember { mutableStateOf(false) }
     var showFontDialog by remember { mutableStateOf(false) }
     var showParamsDialog by remember { mutableStateOf(false) }
+    var showTermuxTest by remember { mutableStateOf(false) }
+    var testBusy by remember { mutableStateOf(false) }
+    var testLog by remember { mutableStateOf("") }
+    var testExit by remember { mutableStateOf<Int?>(null) }
+    var testDur by remember { mutableStateOf(0) }
     var showPromptDialog by remember { mutableStateOf(false) }
     var showProxyDialog by remember { mutableStateOf(false) }
     var keyLinkMeta by remember { mutableStateOf<ProviderMeta?>(null) }
@@ -190,6 +195,17 @@ fun SettingsScreen(
                     value = if (termuxPermGranted) "Разрешено" else "Запросить",
                     onClick = { permLauncher.launch(TermuxBridge.PERM_RUN_COMMAND) }
                 )
+                SettingsRow(
+                    icon = "🧪",
+                    title = "Тест Termux (runAndWatch)",
+                    value = if (termuxPermGranted) "▶ Проверить" else "Нужно разрешение",
+                    onClick = {
+                        if (termuxPermGranted) {
+                            testLog = ""; testExit = null; testBusy = false; testDur = 0
+                            showTermuxTest = true
+                        } else permLauncher.launch(TermuxBridge.PERM_RUN_COMMAND)
+                    }
+                )
             }
 
             Spacer(Modifier.height(14.dp))
@@ -311,6 +327,53 @@ fun SettingsScreen(
     if (showParamsDialog) {
         ParamsCodeDialog(draft.temperature, draft.maxTokens, { tp, mt -> saveNow(draft.copy(temperature = tp, maxTokens = mt)); showParamsDialog = false }, { showParamsDialog = false })
     }
+    if (showTermuxTest) {
+        AlertDialog(
+            onDismissRequest = { if (!testBusy) showTermuxTest = false },
+            title = { Text("🧪 Тест Termux", fontWeight = FontWeight.SemiBold) },
+            text = {
+                Column(Modifier.fillMaxWidth()) {
+                    Text("bash: date; pwd; uname -a; echo TERMUX_OK", fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    if (testBusy) {
+                        Text("⏳ $testLog", fontSize = 12.sp)
+                    } else if (testExit != null) {
+                        Text("exit=$testExit · ${testDur}s", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Box(Modifier.height(180.dp).fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
+                            .padding(6.dp)) {
+                            Text(testLog, fontSize = 11.sp, modifier = Modifier.verticalScroll(rememberScrollState()))
+                        }
+                    } else {
+                        Text("Нажми ▶ Выполнить", fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            },
+            confirmButton = {
+                if (testBusy) TextButton(enabled = false) { Text("⏳") }
+                else Button(onClick = {
+                    testBusy = true; testLog = ""; testExit = null; testDur = 0
+                    scope.launch {
+                        TermuxBridge.runAndWatch(
+                            ctx = ctx,
+                            cmd = "echo \"=== test ===\" ; date ; pwd ; uname -a ; echo TERMUX_OK",
+                            onTick = { elapsed, tail -> testLog = "⏳ ${elapsed}с · $tail" },
+                            onDone = { code, body, dur ->
+                                testBusy = false; testExit = code; testDur = dur; testLog = body
+                            }
+                        )
+                    }
+                }) { Text("▶ Выполнить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { if (!testBusy) showTermuxTest = false }) { Text("✕") }
+            }
+        )
+    }
+
     if (showPromptDialog) {
         var prompt by remember { mutableStateOf(draft.systemPrompt) }
         AlertDialog(

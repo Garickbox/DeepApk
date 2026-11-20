@@ -16,6 +16,9 @@ import android.provider.MediaStore
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 object TermuxBridge {
     const val PERM_RUN_COMMAND = "com.termux.permission.RUN_COMMAND"
@@ -205,6 +208,89 @@ object TermuxBridge {
                 f.absolutePath
             } catch (_: Exception) {
                 null
+            }
+        }
+    }
+
+
+    /**
+     * Запускает команду в Termux (BACKGROUND=true), пишет вывод в /sdcard/Download/deepapk_jobs/<id>.log,
+     * exitCode в <id>.exit. Kotlin-цикл каждые 1.5с зовёт onTick(elapsed, последняя_строка),
+     * при завершении — onDone(exitCode, log_tail_8KB, durationSec).
+     * stallTimeoutSec — тишина в логе = выход (-2). totalTimeoutSec — потолок (-3).
+     */
+    suspend fun runAndWatch(
+        ctx: Context,
+        cmd: String,
+        stallTimeoutSec: Int = 40,
+        totalTimeoutSec: Int = 180,
+        onTick: (Int, String) -> Unit,
+        onDone: (Int, String, Int) -> Unit
+    ) {
+        withContext(Dispatchers.IO) {
+            if (!hasRunPermission(ctx)) {
+                withContext(Dispatchers.Main) { onDone(-1, "Нет разрешения RUN_COMMAND", 0) }
+                return@withContext
+            }
+            val jobsDir = File("/sdcard/Download/deepapk_jobs")
+            if (!jobsDir.exists()) jobsDir.mkdirs()
+            val jobId = "job_" + System.currentTimeMillis() + "_" + (1000..9999).random()
+            val logFile = File(jobsDir, "$jobId.log")
+            val exitFile = File(jobsDir, "$jobId.exit")
+
+            val wrapper = "({$cmd}) > ${logFile.absolutePath} 2>&1; echo \$? > ${exitFile.absolutePath}"
+            val bin = "/data/data/com.termux/files/usr/bin/bash"
+            try {
+                val intent = Intent("com.termux.RUN_COMMAND").apply {
+                    component = ComponentName("com.termux", "com.termux.app.RunCommandService")
+                    putExtra("com.termux.RUN_COMMAND_PATH", bin)
+                    putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", wrapper))
+                    putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
+                    putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+                }
+                ctx.startService(intent)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { onDone(-1, "startService: ${e.message}", 0) }
+                return@withContext
+            }
+
+            val start = System.currentTimeMillis()
+            var lastLen = 0L
+            var lastChange = start
+
+            while (true) {
+                delay(1500)
+                val elapsed = ((System.currentTimeMillis() - start) / 1000).toInt()
+
+                val exitText = if (exitFile.exists()) exitFile.readText().trim() else null
+                val exitCode = exitText?.toIntOrNull()
+                if (exitCode != null) {
+                    val body = if (logFile.exists()) logFile.readText().take(8000) else ""
+                    withContext(Dispatchers.Main) { onDone(exitCode, body, elapsed) }
+                    return@withContext
+                }
+
+                val curLen = if (logFile.exists()) logFile.length() else 0L
+                if (curLen > lastLen) { lastLen = curLen; lastChange = System.currentTimeMillis() }
+
+                val lastLine = if (logFile.exists()) {
+                    try { logFile.readLines().takeLast(2).joinToString(" | ").take(200) }
+                    catch (_: Exception) { "" }
+                } else ""
+
+                withContext(Dispatchers.Main) { onTick(elapsed, lastLine) }
+
+                val stall = (System.currentTimeMillis() - lastChange) / 1000
+                if (stall > stallTimeoutSec) {
+                    val body = if (logFile.exists()) logFile.readText().take(8000) else ""
+                    withContext(Dispatchers.Main) { onDone(-2, body + "\n[stall timeout: нет вывода ${stall}с]", elapsed) }
+                    return@withContext
+                }
+                if (elapsed > totalTimeoutSec) {
+                    val body = if (logFile.exists()) logFile.readText().take(8000) else ""
+                    withContext(Dispatchers.Main) { onDone(-3, body + "\n[total timeout: ${elapsed}с]", elapsed) }
+                    return@withContext
+                }
             }
         }
     }
