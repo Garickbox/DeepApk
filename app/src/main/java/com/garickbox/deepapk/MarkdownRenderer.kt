@@ -759,7 +759,7 @@ fun RenderMdBlock(
                                         .clickable { onOpenHtml(block.code) }
                                         .padding(horizontal = 8.dp, vertical = 2.dp)
                                 )
-                            } else if (langLow !in setOf("xml", "css", "json", "md", "markdown")) {
+                            } else if (TermuxBridge.isRunnableCodeBlock(block.lang, block.code)) {
                                 Text(
                                     text = "▶ Termux",
                                     fontSize = 12.sp,
