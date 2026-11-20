@@ -1,27 +1,26 @@
 package com.garickbox.deepapk
 
-internal const val MAX_HISTORY_CHARS = 150_000
+internal const val MAX_HISTORY_CHARS = 500_000
 
 internal fun capHistory(msgs: List<Message>, maxChars: Int = MAX_HISTORY_CHARS): List<Message> {
     if (msgs.isEmpty()) return msgs
     val sizes = msgs.map { it.content.length }
     val total = sizes.sum()
     if (total <= maxChars) return msgs
-    val kept = mutableListOf<Int>()
-    var acc = 0
-    for (i in msgs.indices.reversed()) {
-        val sz = sizes[i]
-        if (kept.isNotEmpty() && acc + sz > maxChars) break
-        kept.add(0, i)
-        acc += sz
+    if (msgs.size <= 2) return listOf(msgs.last())
+    val minDrop = (maxChars / 4).coerceAtLeast(1)
+    var cutIdx = 1
+    var dropped = 0
+    while (cutIdx < msgs.lastIndex && (total - dropped > maxChars || dropped < minDrop)) {
+        dropped += sizes[cutIdx]
+        cutIdx++
     }
-    if (kept.isNotEmpty() && kept.first() > 0) {
-        val firstSz = sizes[0]
-        if (acc + firstSz <= maxChars) {
-            kept.add(0, 0)
-            acc += firstSz
-        }
+    val out = mutableListOf<Message>()
+    if (sizes[0] + (total - sizes[0] - dropped) <= maxChars) out.add(msgs[0])
+    val skipped = cutIdx - if (out.isEmpty()) 0 else 1
+    if (skipped > 0 && cutIdx < msgs.size) {
+        out.add(Message(role = "user", content = "[...пропущено $skipped сообщений середины диалога...]"))
     }
-    android.util.Log.w("DeepApk", "history capped: ${msgs.size} -> ${kept.size} msgs, chars $total -> $acc")
-    return kept.map { msgs[it] }
+    for (i in cutIdx until msgs.size) out.add(msgs[i])
+    return out
 }

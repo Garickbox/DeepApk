@@ -90,13 +90,14 @@ object ProjectFs {
         val label = getLabel(ctx).ifBlank { "Проект" }
         val bak = activeBackupCount(ctx)
         val bakNote = if (bak > 0) " Внимание: сейчас активен бэкап прошлой правки ($bak файл.) — не предлагай новые правки, пока пользователь не проверит текущую." else ""
-        val booksNote = "\n📚 КНИГИ И ДОКУМЕНТЫ: если пользователь упоминает книгу, учебник, PDF, распознанный документ или спрашивает «есть ли книга про X» — сначала проверь папку .ocr через fs_tree (path=\".ocr\") и поиск fs_grep. В .ocr/HASH/ лежат постраничные page_NNNNN.md от Tesseract OCR и файл _name.txt с оригинальным именем PDF. В корне проекта .ocr НЕ ВИДЕН (скрыт в IGNORED_DIRS), но полностью доступен по явному пути \".ocr/...\". НЕ отвечай «книги нет / не вижу», пока не проверил .ocr. ЗАПРЕЩЕНО писать в fs_* пути-плейсхолдеры и копировать примеры из обсуждения (X, .., ..., app/.../File.kt, .ocr/xyz/page_87.md) — это вызывает «файл не найден» и мусор в чипсе. Путь должен быть РЕАЛЬНЫМ, полученным из fs_tree или fs_grep в этой же сессии. Если точный путь неизвестен — сначала fs_tree(path=\".\") или fs_grep(pattern=\"...\"), потом fs_read по найденному.\n"
-        return booksNote + "ДОСТУП К ПРОЕКТУ (SAF, папка «$label»): у тебя подключён реальный доступ к исходникам на устройстве.$bakNote\n" +
-            "Если нужно посмотреть файлы, найти строку или прочитать точный код — НЕ гадай и НЕ проси пользователя гонять grep, а сразу выведи тег:\n" +
-            "- <fs_tree/> или <fs_tree path=\"app/src/main\"/> — список файлов\n" +
-            "- <fs_grep pattern=\"текст\" path=\"app/src/main\"/> — поиск по коду\n" +
-            "- <fs_read path=\"app/src/main/java/.../File.kt\" start=\"1\" end=\"150\"/> — чтение строк (до 180 строк за раз)\n" +
-            "Если готов предложить точечную правку прямо в SAF — используй <fs_patch path=\"...\"><old>точный фрагмент</old><new>новый код</new></fs_patch> или <fs_write path=\"...\">содержимое</fs_write> (DeepApk сначала сделает бэкап и даст кнопку подтверждения пользователю)."
+        return "ДОСТУП К ПРОЕКТУ (SAF, папка «$label»): подключены реальные исходники.\n" +
+            "Не гадай и не проси юзера гонять grep — сразу выводи до 4 тегов (пути только реальные из fs_tree/fs_grep):\n" +
+            "- <fs_tree/> или <fs_tree path=\"РЕАЛЬНАЯ_ПАПКА\"/>\n" +
+            "- <fs_grep pattern=\"ТЕКСТ\" path=\"РЕАЛЬНАЯ_ПАПКА\"/>\n" +
+            "- <fs_read path=\"РЕАЛЬНЫЙ_ФАЙЛ\" start=\"1\" end=\"180\"/>\n" +
+            "Правка в SAF: <fs_patch path=\"РЕАЛЬНЫЙ_ФАЙЛ\"><old>ТОЧНЫЙ_ФРАГМЕНТ</old><new>НОВЫЙ_КОД</new></fs_patch> или <fs_write path=\"РЕАЛЬНЫЙ_ФАЙЛ\">КОД</fs_write>.\n" +
+            "📚 КНИГИ/OCR: при вопросе про книгу/PDF сначала проверь \".ocr\" через <fs_tree path=\".ocr\"/> и <fs_grep pattern=\"СЛОВО\" path=\".ocr\"/> (внутри _name.txt и page_NNNNN.md)." +
+            (if (bakNote.isNotEmpty()) "\n" + bakNote.trim() else "")
     }
 
     internal fun sanitizeRelPath(raw: String): String? {
@@ -666,19 +667,19 @@ internal fun normalizeDsml(input: String): String {
         val ps = paramRe.findAll(m.groupValues[2]).associate { it.groupValues[1] to it.groupValues[2].trim() }
         when (name) {
             "fs_read" -> {
-                val p = ps["path"] ?: return@replace m.value
-                val s = ps["start"] ?: "1"
-                val e = ps["end"] ?: "150"
-                ""
+                val pa = ps["path"] ?: return@replace m.value
+                val st = ps["start"] ?: "1"
+                val en = ps["end"] ?: "150"
+                "<fs_read path=\"$pa\" start=\"$st\" end=\"$en\"/>"
             }
             "fs_tree" -> {
-                val p = ps["path"] ?: ""
-                ""
+                val pa = ps["path"] ?: ""
+                if (pa.isBlank()) "<fs_tree/>" else "<fs_tree path=\"$pa\"/>"
             }
             "fs_grep" -> {
-                val p = ps["pattern"] ?: return@replace m.value
+                val pat = ps["pattern"] ?: return@replace m.value
                 val pa = ps["path"] ?: ""
-                ""
+                if (pa.isBlank()) "<fs_grep pattern=\"$pat\"/>" else "<fs_grep pattern=\"$pat\" path=\"$pa\"/>"
             }
             "fs_patch", "fs_write" -> {
                 val pa = ps["path"] ?: return@replace m.value
