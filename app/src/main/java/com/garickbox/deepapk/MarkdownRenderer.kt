@@ -54,7 +54,7 @@ private fun splitTableRow(line: String): List<String> {
     return s.split("|").map { it.trim() }
 }
 
-private val mdBlockCache = LruCache<String, List<MdBlock>>(96)
+private val mdBlockCache by lazy { LruCache<String, List<MdBlock>>(96) }
 
 fun parseMarkdownBlocksCached(input: String): List<MdBlock> {
     if (input.isEmpty()) return emptyList()

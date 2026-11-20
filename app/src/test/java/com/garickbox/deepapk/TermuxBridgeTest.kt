@@ -73,6 +73,6 @@ class TermuxBridgeTest {
     }
 
     @Test fun escapeSingle_dollar() {
-        assertEquals("'$HOME'", TermuxBridge.escapeSingle("$HOME"))
+        assertEquals("'\$HOME'", TermuxBridge.escapeSingle("\$HOME"))
     }
 }
