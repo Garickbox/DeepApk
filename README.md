@@ -1,174 +1,126 @@
 # 🧠 DeepApk
 
-**Android-чат с агентом, у которого есть руки внутри твоего телефона.**
+**Android-чат с ИИ-агентом, у которого есть руки прямо внутри вашего телефона.**
 
-DeepSeek / Gemini · SAF-доступ к коду проекта · Termux-мост · .deepapk скиллы · ГОСТ .docx
+DeepSeek · Gemini 4 · ProxyAPI · SAF-доступ к проекту · Окно Termux · Навыки `.deepapk` · ГОСТ `.docx`
 
 [![Build](https://github.com/Garickbox/DeepApk/actions/workflows/build.yml/badge.svg)](https://github.com/Garickbox/DeepApk/actions)
-[![Release](https://img.shields.io/github/v/release/Garickbox/DeepApk?include_prereleases&color=blue)](https://github.com/Garickbox/DeepApk/releases)
-[![minSdk](https://img.shields.io/badge/minSdk-26-green)](https://developer.android.com/about/versions/oreo)
-[![targetSdk](https://img.shields.io/badge/targetSdk-34-green)](https://developer.android.com/about/versions/14)
-[![Kotlin](https://img.shields.io/badge/Kotlin-1.9-purple)](https://kotlinlang.org)
-[![Compose](https://img.shields.io/badge/Jetpack-Compose-blueviolet)](https://developer.android.com/jetpack/compose)
+[![Release](https://img.shields.io/github/v/release/Garickbox/DeepApk?include_prereleases&color=2563eb)](https://github.com/Garickbox/DeepApk/releases)
+[![minSdk](https://img.shields.io/badge/minSdk-26-16a34a)](https://developer.android.com/about/versions/oreo)
+[![targetSdk](https://img.shields.io/badge/targetSdk-34-16a34a)](https://developer.android.com/about/versions/14)
+[![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7c3aed)](https://kotlinlang.org)
+[![Compose](https://img.shields.io/badge/Jetpack-Compose-2563eb)](https://developer.android.com/jetpack/compose)
+
+[📥 Скачать последний APK](https://github.com/Garickbox/DeepApk/releases/latest) · [📦 Все релизы](https://github.com/Garickbox/DeepApk/releases) · [🐛 Сообщить об ошибке](https://github.com/Garickbox/DeepApk/issues)
 
 ---
 
-## ⚡ Что это
+## ⚡ Зачем это нужно
 
-Обычный чат-клиент к API LLM — не интересно. **DeepApk — другое.** У ассистента есть **реальный доступ к папке проекта через SAF**, **мост в Termux** (запуск bash/python одной кнопкой) и **собственный формат навыков .deepapk**, который учит модель работать под твой проект.
+Обычный мобильный клиент к LLM умеет только переписываться. **DeepApk работает как карманная среда разработки и автоматизации на устройстве** — без ПК, серверов и облачных IDE:
 
-Ты пишешь: «найди, где вызывается startStream» — модель отвечает XML-тегом, приложение само читает файлы из SAF, отдаёт результат обратно в модель, и та даёт точечный fs_patch с правкой. **Ты нажимаешь ✅ ОК — только тогда файл меняется.** Никакой магии, никаких «модель сама записала».
+- подключается к локальной папке вашего проекта через системный **Android SAF (`DocumentsContract`)**;
+- показывает **unified diff** до записи и меняет файлы **только после вашего нажатия `✅ ОК`** (с бэкапом и откатом в один тап);
+- запускает `bash` и `python3` скрипты в **Termux** из единого окна с живым логом и собирает результат в чат;
+- собирает офлайн-документы **ГОСТ `.docx`** и переносит роли между устройствами через пакеты **`.deepapk`**.
 
-Всё работает **на телефоне**, без ПК и сервера.
+---
 
 ## ✨ Возможности
 
-### 💬 Чат
+### 💬 Чат, модели и OCR
+- **Провайдеры и быстрый переключатель:**
+  - **DeepSeek API** (`deepseek-flash`, `deepseek-chat`, `deepseek-reasoner` с отдельным блоком `Reasoning`);
+  - **Google Gemini** (`gemini-4-hydrogen`, `gemini-4-neon`, `gemini-4-argon`, `gemini-3.1-flash-lite`);
+  - **ProxyAPI / свой endpoint** (OpenAI-совместимый URL и модели в одном месте).
+- **Вложения и OCR:** прикрепление файлов, текста, фото с камеры или галереи с распознаванием текста через **Google ML Kit** и **Tesseract4Android**.
+- **Сессии и роли:** боковой drawer диалогов с поиском, переименованием, встроенными пресетами и самообучением через `<skill_save>`.
 
-- **Стриминг** от DeepSeek (deepseek-chat, deepseek-reasoner) и Gemini (gemini-1.5-pro, gemini-1.5-flash, gemini-2.0-flash) с переключением одним тапом
-- **Reasoning** отдельным блоком (deepseek-reasoner)
-- **Множественные сессии** с drawer'ом, переименованием, удалением
-- **Роли (presets)** — default, termux, docx_report, deepapk_dev — встроенные .md заготовки, правятся и сохраняются локально
-- **Auto-learn** через skill_save — модель по ходу работы обновляет свой preset
-- **Attachments** — файлы, текст, изображения
+### 📂 SAF-доступ к коду проекта
+- `<fs_tree/>` — обзор дерева каталогов проекта.
+- `<fs_grep/>` — поиск совпадений по файлам через `DocumentsContract`.
+- `<fs_read/>` — точечное чтение участков кода до 180 строк.
+- `<fs_patch/>` и `<fs_write/>` — предпросмотр **unified diff** в нижней панели правок.
+- **Транзакции и надёжность:** автоматический бэкап в `filesDir/fs_backups`, откат в один тап и защита блокирующих SAF-вызовов через `runInterruptible` + таймаут 180с.
 
-### 📂 SAF-доступ к проекту
+### 🔌 Единое окно Termux и маркер
+- Кнопка `▶ Termux` на исполняемых блоках (`bash`, `sh`, `python`) и в меню сообщения открывает **единое окно запуска**:
+  - переключатель интерпретатора `bash` / `python` и редактирование скрипта перед стартом;
+  - живой хвост лога в реальном времени и кнопка **«⏹ Остановить»**;
+  - прикрепление вывода прямо в ленту вложений компактным чипсом (`📎 В чат`).
+- **Ручной маркер:** если ответ модели пришёл без кодового блока, откройте *«Выбрать текст»*, выделите нужный фрагмент пальцем и нажмите **«▶ В Termux»**.
 
-- **fs_tree** — дерево файлов (рекурсивно, с фильтрами)
-- **fs_grep** — grep по коду проекта через DocumentsContract
-- **fs_read** — точечное чтение до 180 строк
-- **fs_patch / fs_write** — правка файлов с **дифф-превью** и **подтверждением пользователя**
-- **Транзакции** — applyWithBackup → commitBackupOk / rollbackBackup. Каждая правка бэкапится в filesDir/fs_backups, откат в один тап
-- **runInterruptible + withTimeoutOrNull(180s)** — блокирующие Binder-вызовы SAF прерываются по таймауту
-- **P4-lite логирование** — каждая ошибка SAF (SecurityException / IOException / IllegalArgumentException) попадает в logcat с именем файла и docId
+### 📄 ГОСТ `.docx` офлайн
+- Генерация настоящих документов Word (**OOXML ZIP**) из XML-блока `<doc_report>`:
+  - титульный лист, оглавление и колонтитулы с автонумерацией страниц (`PAGE`);
+  - `autofit`-таблицы и рендеринг `<svg>` в PNG;
+  - автосохранение HTML-превью — можно открыть в браузере до скачивания `.docx`.
 
-### 🔌 Termux-мост
-
-- **▶ Termux** на любом code-блоке — запуск bash/python через RUN_COMMAND
-- **Inline fallback** — если MediaStore.insert не сработал, код летит в RUN_COMMAND -c напрямую
-
-### 📄 ГОСТ .docx
-
-- Модель отвечает XML-блоком doc_report — приложение собирает **настоящий .docx** (OOXML ZIP) по **ГОСТ**
-- Титульный лист, оглавление, колонтитулы с PAGE, autofit-таблицы, SVG → PNG
-- HTML-превью автосохраняется — можно открыть в браузере до скачивания
-- Кнопка **📥 Скачать .docx** в каждом сообщении с документом
-
-### 🎨 Markdown
-
-- Блоки кода с копированием, подсветкой, кнопками **▶ Termux** и **🌐 Открыть**
-- Таблицы, списки, цитаты, заголовки
-- Сворачивание прикреплённых файлов (`[Файл: ...]`) в компактные chip'ы — полный текст идёт в API
-
-### 🧩 .deepapk — свои навыки
-
-- **Формат:** deepapk-skill-v1 — JSON + Markdown, ZIP-контейнер
-- **Импорт:** ACTION_VIEW (*.deepapk), ACTION_SEND, пункт **📂 Из файла** в меню
-- **Экспорт:** **📤 .deepapk** — сохранить текущий preset с накопленными правилами
-- **Встроенные** в assets/skills/: default, termux, docx_report, deepapk_dev
-- **skill_save** — модель учится на ходу: сохраняет правило в активный пресет, оно подставляется в системный промт следующего сообщения
-
-## 🚀 Установка
-
-### Готовый APK (рекомендуется)
-
-1. Открой [Releases](https://github.com/Garickbox/DeepApk/releases)
-2. Скачай последний DeepApk-build-N.apk
-3. Разреши установку из неизвестных источников → установи
-
-### Сборка из исходников
-
-Требуется JDK 17, Android SDK (build-tools 34), ~4 ГБ RAM.
-
-Команды:
-
-- `git clone https://github.com/Garickbox/DeepApk.git`
-- `cd DeepApk`
-- `./gradlew assembleDebug`
-
-Готовый APK появится в `app/build/outputs/apk/debug/app-debug.apk`.
-
-Альтернатива — **CI собирает APK автоматически** при каждом push в main (см. .github/workflows/build.yml). Артефакт доступен во вкладке Actions.
-
-### Первый запуск
-
-1. Задай **API-ключ** DeepSeek или Gemini в Настройках
-2. Выбери модель (чип DS / ✦ Gemini в шапке)
-3. Подключи **SAF-папку проекта** — чип в TopBar → выбери папку с репозиторием
-4. Готово: модель видит структуру и может предлагать правки
-
-## 🏗️ Архитектура
-
-- **MainActivity.kt** — тема, роутинг chat/settings, ACTION_SEND / ACTION_VIEW *.deepapk
-- **ChatScreen.kt** — главный экран: лента, drawer, TopBar, старт стрима
-- **ChatSafController.kt** — SAF-цикл (Success / Error / Timeout), таймаут, retry
-- **ChatFsEditsBar.kt** — нижний бар правок + раскрывающийся diff
-- **ProjectFs.kt** — SAF через DocumentsContract: tree / grep / read / write / backup
-- **PatchPreview.kt** — unified diff из fs_patch / fs_write (до применения)
-- **SkillPackage.kt** — формат .deepapk (импорт / экспорт)
-- **PresetStore.kt** — встроенные + пользовательские скиллы
-- **DocxEngine.kt** — ГОСТ .docx (OOXML, autofit, PAGE)
-- **MarkdownRenderer.kt** — рендер Markdown/кода/таблиц/doc_report
-- **DeepSeekApi.kt** — DeepSeek + Gemini клиенты (OkHttp, стриминг)
-- **ChatStore.kt** — сессии в JSON
-- **SettingsStore.kt** — настройки в SharedPreferences
-- **SettingsScreen.kt / SettingsDialogs.kt** — экран настроек и диалоги
-- **ModelCatalog.kt** — каталог моделей
-- **AttachmentHelper.kt** — прикрепление файлов
-- **TermuxBridge.kt** — RUN_COMMAND мост (файл + inline fallback)
-- **UpdateChecker.kt** — проверка обновлений по GitHub API
-
-**Стек:** Kotlin · Jetpack Compose (Material 3) · Coroutines · OkHttp 4.12 · Storage Access Framework · OOXML.
-
-## 🧪 Скрипты автора (локальные, вне репозитория)
-
-**Важно:** эти скрипты не входят в репозиторий — это личная обвязка автора в его Termux. У вас их не будет, а `bash ~/deep_build.sh` упадёт с `No such file`. Если нужны — пишите свои аналоги, в проекте их нет.
-
-- **~/deep_build.sh** — авторская сборка (deepapk_guard.py + gradle + aapt2). Эквивалент: `./gradlew assembleDebug`
-- **~/deepapk_guard.py** — проверка Log.w / try-catch перед сборкой
-- **~/deep_go.sh "msg"** — сборка + commit + push + CI-watch
-- **~/aile_dl.sh** — ожидание CI + скачивание APK в apk/
-- **~/deep_watch.sh** — ожидание CI (wget — обход РКН >8 КБ)
-- **~/deep_install.sh** — установка APK через ADB
-- **~/deep_err.sh** — дамп ошибок CI в log.txt
-
-Для публичного использования — только `./gradlew assembleDebug` и вкладка Actions.
-
-## 🎯 Roadmap
-
-- [x] SAF-доступ к проекту (tree / grep / read / patch / write)
-- [x] Транзакционные правки с бэкапом и откатом
-- [x] Diff-preview перед применением
-- [x] Termux-мост с inline fallback
-- [x] .deepapk скиллы (импорт / экспорт / auto-learn)
-- [x] ГОСТ .docx
-- [ ] P6 — разгрузка ChatScreen.kt (фазы 2–3)
-- [ ] Multi-model — Claude, OpenAI
-- [ ] RAG-память — эмбеддинги по проекту
-- [ ] Smoke-тесты для ProjectFs
-- [ ] Плагины — .deepapk с исполняемым кодом
-- [ ] WebDAV/SSH — синк проекта вне SAF
-
-## 🤝 Участие
-
-- **Kotlin**: не пиши юникод-эскейпы в строках — только живой UTF-8 эмодзи или суррогатные пары
-- **AndroidManifest**: pathSuffix требует android:host="*"
-- **Compose**: не ломай imePadding / navigationBarsPadding, не пиши continue внутри forEach
-- **SAF**: блокирующие вызовы — только через runInterruptible(Dispatchers.IO) + withTimeoutOrNull
-- **Файлы**: всё временное — в ~/deep_tmp, никакого git add -A
-
-## 📜 Лицензия
-
-MIT — в ближайшее время.
-
-## 💬 Контакты
-
-**Разработчик:** Garickbox
-**Issues:** https://github.com/Garickbox/DeepApk/issues
-**Releases:** https://github.com/Garickbox/DeepApk/releases
+### 🧩 Навыки `.deepapk` (`deepapk-skill-v1`)
+- Портативный формат ролей (JSON + Markdown): импорт из мессенджеров и файлового менеджера через `ACTION_VIEW` / `ACTION_SEND` и экспорт одним нажатием.
+- Модель умеет запоминать новые правила вашего проекта на лету через тег `<skill_save>`.
 
 ---
 
-**Готово к бою.** 🔥
+## 🚀 Установка и первый запуск
 
-*DeepApk — не «ещё один клиент к API». Это агент, который живёт в твоём телефоне и умеет править твой код.*
+### Вариант 1 — Готовый APK (рекомендуется)
+1. Откройте [Releases](https://github.com/Garickbox/DeepApk/releases) и скачайте свежий **`DeepApk-build-N.apk`**.
+2. Разрешите установку из неизвестных источников и установите приложение.
+
+### Вариант 2 — Сборка из исходников
+Требуется **JDK 17**, **Android SDK (compileSdk / build-tools 34)** и ~4 ГБ RAM:
+
+```bash
+git clone https://github.com/Garickbox/DeepApk.git
+cd DeepApk
+./gradlew assembleDebug
+```
+
+Готовый APK появится в `app/build/outputs/apk/debug/app-debug.apk`. Также при каждом push в `main` сборка и тесты запускаются в **GitHub Actions** автоматически.
+
+### Первый запуск
+1. Откройте **Настройки** и введите API-ключ (DeepSeek, Gemini или ProxyAPI).
+2. Выберите провайдера и модель в верхней панели.
+3. Подключите папку проекта через SAF-чип в шапке (при необходимости) и выдайте Termux разрешение `RUN_COMMAND` для запуска скриптов.
+
+---
+
+## 🏗️ Архитектура
+
+| Модуль | Назначение |
+|---|---|
+| `MainActivity.kt` | Точка входа, светлая/тёмная тема, `ACTION_SEND` и `ACTION_VIEW` для `*.deepapk` |
+| `ChatScreen.kt` | Главный экран чата, drawer сессий, единое окно Termux, диалоги и маркер текста |
+| `DeepSeekApi.kt` · `ModelCatalog.kt` | Стриминг DeepSeek, Gemini и ProxyAPI поверх OkHttp 4.12 |
+| `ProjectFs.kt` · `ChatSafController.kt` | Дерево, поиск, чтение и транзакционные бэкапы через `DocumentsContract` |
+| `PatchPreview.kt` · `ChatFsEditsBar.kt` | Unified diff и панель подтверждения правок |
+| `TermuxBridge.kt` | Выполнение `bash` / `python3` через `RUN_COMMAND`, PID-отмена и чтение хвоста лога |
+| `DocxEngine.kt` | Офлайн-сборка ГОСТ `.docx` (OOXML ZIP) и HTML-превью |
+| `MarkdownRenderer.kt` · `UserAttachments.kt` | Рендер Markdown/кода/таблиц и чипсы прикреплённых файлов |
+| `SkillPackage.kt` · `PresetStore.kt` | Пакеты `.deepapk`, встроенные роли и автообучение `<skill_save>` |
+| `AttachmentHelper.kt` · `OcrCache.kt` | Вложения и распознавание текста (ML Kit + Tesseract4Android) |
+| `ChatStore.kt` · `SettingsStore.kt` · `UpdateChecker.kt` | Локальное хранение чатов/настроек и проверка новых релизов |
+
+**Стек:** Kotlin 1.9 · Jetpack Compose (Material 3) · Coroutines 1.8.1 · OkHttp 4.12 · Android SAF · OOXML · ML Kit · Tesseract4Android · `minSdk 26` / `targetSdk 34` · `arm64-v8a`
+
+---
+
+## 🎯 Roadmap
+
+- [x] SAF-доступ к проекту (`tree` / `grep` / `read` / `patch` / `write`)
+- [x] Транзакционные правки с бэкапом, diff-превью и откатом в один тап
+- [x] Единое окно Termux, живой хвост лога и запуск выделенного маркером фрагмента
+- [x] Портативные навыки `.deepapk` и автообучение `<skill_save>`
+- [x] Генератор ГОСТ `.docx` с SVG и HTML-превью
+- [ ] Дальнейшая декомпозиция UI-слоя чата
+- [ ] Поддержка новых провайдеров (Claude, OpenAI)
+- [ ] Локальный RAG-поиск по кодовой базе
+- [ ] Синхронизация проектов по WebDAV / SSH вне SAF
+
+---
+
+## 📜 Лицензия и обратная связь
+
+- **Релизы:** [github.com/Garickbox/DeepApk/releases](https://github.com/Garickbox/DeepApk/releases)
+- **Вопросы и баги:** [github.com/Garickbox/DeepApk/issues](https://github.com/Garickbox/DeepApk/issues)

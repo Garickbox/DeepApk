@@ -1,8 +1,10 @@
 name: Build DeepApk
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -10,8 +12,12 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: 17 }
+        with:
+          distribution: temurin
+          java-version: 17
       - uses: gradle/actions/setup-gradle@v3
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --no-daemon
@@ -19,12 +25,46 @@ jobs:
         run: ./gradlew assembleDebug --no-daemon
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk DeepApk-build-${{ github.run_number }}.apk
+      - name: Prepare release notes
+        id: notes
+        run: |
+          APK="DeepApk-build-${{ github.run_number }}.apk"
+          SHA=$(sha256sum "$APK" | awk '{print $1}')
+          SIZE=$(du -h "$APK" | awk '{print $1}')
+          PREV_TAG=$(git tag --list 'build-*' --sort=-v:refname | head -n 1 || true)
+          if [ -n "$PREV_TAG" ]; then
+            CHANGES=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (\`%h\`)" -n 20)
+          else
+            CHANGES=$(git log -n 10 --pretty=format:"- %s (\`%h\`)")
+          fi
+          [ -z "$CHANGES" ] && CHANGES="- Плановая сборка \`${{ github.sha }}\`"
+          {
+            echo "body<<EOF_NOTES"
+            echo "## 🧠 DeepApk v1.0.${{ github.run_number }} (\`build-${{ github.run_number }}\`)"
+            echo ""
+            echo "Android-клиент для DeepSeek, Gemini 4 и ProxyAPI с доступом к коду через SAF, единым окном Termux, навыками \`.deepapk\` и генерацией ГОСТ \`.docx\`."
+            echo ""
+            echo "### ✨ Изменения в этой сборке"
+            echo "$CHANGES"
+            echo ""
+            echo "### 📦 Информация о сборке"
+            echo "| Параметр | Значение |"
+            echo "|---|---|"
+            echo "| APK | \`$APK\` ($SIZE) |"
+            echo "| Версия | \`1.0.${{ github.run_number }}\` (\`versionCode ${{ github.run_number }}\`) |"
+            echo "| Платформа | Android 8.0+ (minSdk 26 · targetSdk 34 · \`arm64-v8a\`) |"
+            echo "| SHA-256 | \`$SHA\` |"
+            echo ""
+            echo "### 📲 Установка"
+            echo "1. Скачайте **\`$APK\`** в разделе **Assets** ниже."
+            echo "2. Разрешите установку из неизвестных источников и установите APK."
+            echo "3. Укажите API-ключ в Настройках и при необходимости подключите папку проекта через SAF."
+            echo "EOF_NOTES"
+          } >> "$GITHUB_OUTPUT"
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: build-${{ github.run_number }}
-          body: |
-            Автосборка DeepApk
-            versionCode: ${{ github.run_number }}
+          name: DeepApk v1.0.${{ github.run_number }} (build-${{ github.run_number }})
+          body: ${{ steps.notes.outputs.body }}
           files: DeepApk-build-${{ github.run_number }}.apk
