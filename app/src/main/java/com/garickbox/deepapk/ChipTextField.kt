@@ -66,7 +66,7 @@ fun ChipTextField(
             maxLines = maxLines,
             textStyle = TextStyle(color = textColor, fontSize = fontSizeSp.sp, lineHeight = lineHeightSp.sp),
             cursorBrush = SolidColor(cursorColor),
-            decorationBox = { inner: () -> Unit ->
+            decorationBox = { inner ->
                 Box(Modifier.fillMaxWidth()) {
                     if (value.isEmpty() && placeholder.isNotBlank()) {
                         Text(placeholder, fontSize = fontSizeSp.sp, color = textColor.copy(alpha = 0.5f))
