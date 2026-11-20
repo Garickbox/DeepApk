@@ -7,7 +7,7 @@
   - `MainActivity.kt` — точка входа, тема (`DeepDarkColors`/`DeepLightColors`), роутинг `incomingShare` и `incomingSkill` (`.deepapk`).
   - `ChatScreen.kt` — экран чата (~2300 строк), TopBar, лента `ChatFeedItem`, `startStream` (стриминг + авто-чтение SAF до 8 шагов + `skill_save`).
   - `ChatDrawer.kt` — drawer сессий (`ChatDrawerSheet`, ~158 строк): поиск, список, удаление, кнопки настроек, баланс. **Вынесен из `ChatScreen.kt`.**
-  - `ChatHistory.kt` — `capHistory` + `MAX_HISTORY_CHARS = 500`. **Вынесен из `ChatScreen.kt`.**
+  - `ChatHistory.kt` — `capHistory` + `MAX_HISTORY_CHARS = 500_000`. **Вынесен из `ChatScreen.kt`.**
   - `UserAttachments.kt` — `splitUserAttachments` (сворачивает `[Файл: ...]` и папку SAF в чипсы). **Вынесен из `ChatScreen.kt`.**
   - `ContextActions.kt` — `copyPlain`, `ContextMenuItem`, `ModePill`, `DeepWhaleLogo`. **Вынесен из `ChatScreen.kt`.**
   - `ProjectFs.kt` — доступ к папке проекта через SAF (`DocumentsContract`), `listTree`, `grepProject`, `readFileLines` (до 180 строк), транзакционный `applyWithBackup` / `commitBackupOk` / `rollbackBackup`.
