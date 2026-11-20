@@ -70,8 +70,6 @@ private sealed class ChatFeedItem(val key: String) {
     data class AssistantBlock(val msgIdx: Int, val msg: Message, val blockIdx: Int, val block: MdBlock) :
         ChatFeedItem("b_${msg.id}_$blockIdx")
     data class AssistantFooter(val msgIdx: Int, val msg: Message) : ChatFeedItem("f_${msg.id}")
-    data class TermuxRun(val msgIdx: Int, val msg: Message, val cmd: String, val cmdIdx: Int) :
-        ChatFeedItem("t_${msg.id}_$cmdIdx")
 }
 
 private const val SECTOR_SIZE = 28
@@ -88,10 +86,6 @@ fun ChatScreen(
     onOpenSettings: () -> Unit
 ) {
     val ctx = LocalContext.current
-    var termuxRunningKey by remember { mutableStateOf<String?>(null) }
-    var termuxLogs by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var termuxExits by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
-    var termuxDurs by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -952,7 +946,6 @@ fun ChatScreen(
                                     } else {
                                         if (msg.reasoning.isNotBlank()) add(ChatFeedItem.AssistantReasoning(i, msg))
                                         val stripped = stripTermuxTags(stripDocReportForMarkdown(msg.content))
-                                        val termuxCmds = extractTermuxCmds(msg.content)
                                         val docRep = extractDocReport(msg.content)
                                         if (msg.content.isBlank() && streaming && i == messages.size - 1) {
                                             add(ChatFeedItem.AssistantPending(i, msg))
@@ -969,9 +962,6 @@ fun ChatScreen(
                                         }
                                         if ((msg.content.isNotBlank() || msg.reasoning.isNotBlank()) && !(streaming && i == messages.size - 1)) {
                                             add(ChatFeedItem.AssistantFooter(i, msg))
-                                        }
-                                        termuxCmds.forEachIndexed { tIdx, tc ->
-                                            add(ChatFeedItem.TermuxRun(i, msg, tc.cmd, tIdx))
                                         }
                                     }
                                 }
@@ -1102,102 +1092,6 @@ fun ChatScreen(
                                             }
                                         }
                                     }
-                                    is ChatFeedItem.TermuxRun -> {
-                                        val key = item.key
-                                        val isRunning = termuxRunningKey == key
-                                        val log = termuxLogs[key].orEmpty()
-                                        val exit = termuxExits[key]
-                                        val dur = termuxDurs[key] ?: 0
-                                        Surface(
-                                            shape = RoundedCornerShape(12.dp),
-                                            color = MaterialTheme.colorScheme.surface,
-                                            border = BorderStroke(1.dp, DeepSeekBlue.copy(alpha = 0.35f)),
-                                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                                        ) {
-                                            Column(Modifier.padding(10.dp)) {
-                                                Text(
-                                                    "▶ Termux: ${item.cmd.take(120)}",
-                                                    fontSize = 12.5.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                    maxLines = 2,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                if (isRunning) {
-                                                    Spacer(Modifier.height(6.dp))
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                                                        Spacer(Modifier.width(8.dp))
-                                                        Text(
-                                                            log.takeLast(80).ifBlank { "выполняется…" },
-                                                            fontSize = 11.5.sp,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis
-                                                        )
-                                                    }
-                                                } else if (exit != null) {
-                                                    Spacer(Modifier.height(4.dp))
-                                                    Text(
-                                                        text = if (exit == 0) "✅ exit=0 · ${dur}s" else "⚠️ exit=$exit · ${dur}s",
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.Medium,
-                                                        color = if (exit == 0) DeepSeekBlue else MaterialTheme.colorScheme.error
-                                                    )
-                                                }
-                                                Spacer(Modifier.height(8.dp))
-                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                    if (isRunning) {
-                                                        Button(
-                                                            onClick = { termuxRunningKey = null },
-                                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                                                            shape = RoundedCornerShape(8.dp),
-                                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp)
-                                                        ) { Text("⏹ Прервать", fontSize = 11.5.sp) }
-                                                    } else {
-                                                        Button(
-                                                            enabled = termuxRunningKey == null,
-                                                            onClick = {
-                                                                termuxRunningKey = key
-                                                                termuxLogs = termuxLogs + (key to "")
-                                                                termuxExits = termuxExits - key
-                                                                scope.launch {
-                                                                    TermuxBridge.runAndWatch(
-                                                                        ctx = ctx,
-                                                                        cmd = item.cmd,
-                                                                        onTick = { _, tail ->
-                                                                            termuxLogs = termuxLogs + (key to tail)
-                                                                        },
-                                                                        onDone = { code, body, durSec ->
-                                                                            termuxLogs = termuxLogs + (key to body)
-                                                                            termuxExits = termuxExits + (key to code)
-                                                                            termuxDurs = termuxDurs + (key to durSec)
-                                                                            termuxRunningKey = null
-                                                                        }
-                                                                    )
-                                                                }
-                                                            },
-                                                            shape = RoundedCornerShape(8.dp),
-                                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp)
-                                                        ) { Text("▶ Выполнить", fontSize = 11.5.sp) }
-                                                    }
-                                                }
-                                                if (exit != null && log.isNotBlank()) {
-                                                    Spacer(Modifier.height(8.dp))
-                                                    Box(
-                                                        Modifier.fillMaxWidth().heightIn(max = 220.dp)
-                                                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
-                                                            .padding(8.dp)
-                                                    ) {
-                                                        Text(
-                                                            log.take(4000),
-                                                            fontSize = 11.sp,
-                                                            modifier = Modifier.verticalScroll(rememberScrollState())
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
                                     is ChatFeedItem.AssistantReasoning -> {
                                         val m = item.msg
                                         val thoughtBarColor = if (isDark) Color(0xFF3E4554) else Color(0xFFD0D5DD)
@@ -1276,13 +1170,12 @@ fun ChatScreen(
                                                                 onDone = { exitCode, body, dur ->
                                                                     safStatus = ""
                                                                     val icon = if (exitCode == 0) "\u2705" else "\u26A0\uFE0F"
-                                                                    val tag = if (isPython) "python" else "bash"
+                                                                    val tag = if (isPython) "bash" else "bash"
                                                                     val txt = body.trim().ifBlank { "(пусто)" }
                                                                     val fence = "```"
-                                                                    val userMsg = "[Termux $tag $icon exit=$exitCode \u00B7 ${dur}\u0441]\n$fence\n$txt\n$fence"
-                                                                    messages.add(Message(role = "user", content = userMsg))
-                                                                    persistCurrentSession()
-                                                                    startStream(scrollAnchorIdx = messages.size - 1)
+                                                                    val safeName = "[Файл: \uD83D\uDCBB $tag $icon exit=$exitCode \u00B7 ${dur}\u0441]"
+                                                                    val block = safeName + "\n" + fence + "\n" + txt + "\n" + fence
+                                                                    input = if (input.isBlank()) block else input + "\n\n" + block
                                                                 }
                                                             )
                                                         }
