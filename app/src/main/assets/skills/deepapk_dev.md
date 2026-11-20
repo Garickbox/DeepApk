@@ -17,7 +17,7 @@
   - `TermuxBridge.kt` — запуск скриптов в Termux (`RUN_COMMAND`), `isRunnableCodeBlock`, `detectInterpreter`, `readLogSmart` (начало + хвост лога), `TermuxJobHandle` + отмена по `.pid`, `cleanupOldJobs`.
   - `MarkdownRenderer.kt` — парсер Markdown/кода/таблиц/`doc_report`; кнопка `▶ Termux` ставится только на исполняемые блоки (`TermuxBridge.isRunnableCodeBlock`), кнопки Открыть, Посмотреть, Скачать `.docx`.
   - `SkillPackage.kt` — формат `deepapk-skill-v1` (`.deepapk`), импорт из VIEW/SEND/диалога и экспорт через `FileProvider`.
-  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 15** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
+  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 16** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
   - `DocxEngine.kt` — генератор ГОСТ `.docx` из блока `doc_report` (OOXML ZIP, autofit-таблицы, svg в PNG, PAGE в колонтитуле, автосохранение HTML).
   - `SettingsScreen.kt`, `SettingsDialogs.kt`, `SettingsStore.kt` — экран настроек, диалоги пресетов/скиллов/бэкапа и хранилище настроек.
   - `DeepSeekApi.kt`, `ModelCatalog.kt`, `ChatStore.kt`, `AttachmentHelper.kt`, `OcrCache.kt`, `UpdateChecker.kt`.
@@ -64,7 +64,7 @@
 ## 4. ЧАСТЫЕ ГРАБЛИ ПРОЕКТА (НЕ ПОВТОРЯТЬ)
 - В Kotlin-строках нельзя 8-значный юникод-эскейп (нужны суррогаты UTF-16 или живые UTF-8 эмодзи), не ставь лишний слэш перед uXXXX в UI-строках.
 - В DocxEngine.kt выравнивание абзаца строго `left` (не `both`).
-- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **15**) в унисон с картой и разделом 4.
+- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **16**) в унисон с картой и разделом 4.
 - В AndroidManifest.xml фильтр pathSuffix требует `android:host="*"`.
 - В Compose у `BasicTextField` пиши `decorationBox = { inner ->` без явного типа `() -> Unit` (иначе runtime `ClassCastException: ComposableLambdaImpl`).
 - Не ломай imePadding / navigationBarsPadding, не используй continue внутри inline-лямбд (forEach), используй формат `[Файл: ...]` для сворачивания в чипс.
