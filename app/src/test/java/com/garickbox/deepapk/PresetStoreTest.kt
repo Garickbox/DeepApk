@@ -16,7 +16,9 @@ class PresetStoreTest {
     @Test fun learned_headers() { assertEquals("", PresetStore.sanitizeLearned("# Заголовок")); assertEquals("", PresetStore.sanitizeLearned("## Второй")) }
     @Test fun learned_broken() { assertEquals("", PresetStore.sanitizeLearned("- ) обрывок длинный тут")) }
     @Test fun learned_norm() { assertEquals("• это правило длинное тут", PresetStore.sanitizeLearned("это правило длинное тут")) }
-    @Test fun learned_norm_kept() { assertEquals("• уже было", PresetStore.sanitizeLearned("• уже было")) }
+    @Test fun learned_norm_kept() {
+        assertEquals("• уже правило длинное", PresetStore.sanitizeLearned("• уже правило длинное"))
+    }
     @Test fun learned_dedup() {
         val r = PresetStore.sanitizeLearned("• правило длинное здесь\n• Правило длинное здесь")
         assertEquals(1, r.split("\n").size)
