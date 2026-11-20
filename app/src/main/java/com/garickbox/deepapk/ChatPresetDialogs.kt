@@ -78,7 +78,10 @@ internal fun PresetEditDialog(
                     Toast.makeText(ctx, "Файл пустой", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
-                Toast.makeText(ctx, "Ошибка чтения: ${e.message    }
+                Toast.makeText(ctx, "Ошибка чтения: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)

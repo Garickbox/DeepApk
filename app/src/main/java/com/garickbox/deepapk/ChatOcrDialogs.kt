@@ -70,7 +70,7 @@ internal fun OcrBaseDialog(
                 Text(
                     "Страниц: ${ocrStats.pages} · Файлов: ${ocrStats.files} · ${OcrCache.formatBytes(ocrStats.bytes)}",
                     fontSize = 12.5.sp,
-                    color =
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(10.dp))
                 if (ocrBusy) {
