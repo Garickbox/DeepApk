@@ -90,7 +90,7 @@ fun RichModelDialog(provider: String, selected: String, onSelect: (String) -> Un
                         }
                     }
                 }
-                if (provider == "custom" || provider == "openrouter") {
+                if (provider == "custom") {
                     OutlinedTextField(value = customId, onValueChange = { customId = it }, singleLine = true, label = { Text("Свой ID модели", fontSize = 12.sp) }, modifier = Modifier.fillMaxWidth())
                     TextButton(onClick = { if (customId.isNotBlank()) onSelect(customId.trim()) }) { Text("Использовать свой ID") }
                 }
@@ -139,7 +139,7 @@ fun CustomProxyDialog(initialUrl: String, onSave: (String) -> Unit, onDismiss: (
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Быстрые пресеты (оплата МИР/СБП):", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("ProxyAPI" to "https://api.proxyapi.ru/openai/v1", "VseGPT" to "https://api.vsegpt.ru/v1", "AITunnel" to "https://api.aitunnel.ru/v1").forEach { (lbl, u) ->
+                    listOf("ProxyAPI" to "https://api.proxyapi.ru/v1/chat/completions", "VseGPT" to "https://api.vsegpt.ru/v1", "AITunnel" to "https://api.aitunnel.ru/v1").forEach { (lbl, u) ->
                         OutlinedButton(onClick = { url = u }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp), modifier = Modifier.height(30.dp)) { Text(lbl, fontSize = 11.sp) }
                     }
                 }
@@ -162,7 +162,7 @@ fun ParamsCodeDialog(initTemp: Float, initMax: Int, onSave: (Float, Int) -> Unit
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Быстрый пресет:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(onClick = { temp = 0.2f; maxT = 16384 }, contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(30.dp)) { Text("💻 Код 0.2", fontSize = 11.sp) }
+                    OutlinedButton(onClick = { temp = 0.2f; maxT = 32768 }, contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(30.dp)) { Text("💻 Код 0.2", fontSize = 11.sp) }
                     OutlinedButton(onClick = { temp = 0.7f; maxT = 16384 }, contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(30.dp)) { Text("⚖ Баланс 0.7", fontSize = 11.sp) }
                     OutlinedButton(onClick = { temp = 1.0f; maxT = 16384 }, contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(30.dp)) { Text("🎨 Текст 1.0", fontSize = 11.sp) }
                 }

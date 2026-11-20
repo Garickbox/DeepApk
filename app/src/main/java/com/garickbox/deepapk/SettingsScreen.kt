@@ -48,9 +48,7 @@ fun SettingsScreen(
 
     var showProviderDialog by remember { mutableStateOf(false) }
     var showDeepSeekKeyDialog by remember { mutableStateOf(false) }
-    var showGeminiKeyDialog by remember { mutableStateOf(false) }
     var showModelDialog by remember { mutableStateOf(false) }
-    var showGeminiModelDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
     var showFontDialog by remember { mutableStateOf(false) }
     var showParamsDialog by remember { mutableStateOf(false) }
