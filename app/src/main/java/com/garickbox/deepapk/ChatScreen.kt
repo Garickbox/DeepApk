@@ -960,7 +960,7 @@ fun ChatScreen(
                                                 add(ChatFeedItem.AssistantBlock(i, msg, 9000, MdBlock.Paragraph("📄 Генерирую документ «${docRep.title}» (${msg.content.length} симв.)…")))
                                             }
                                         }
-                                        if (msg.content.isNotBlank() && !(streaming && i == messages.size - 1)) {
+                                        if ((msg.content.isNotBlank() || msg.reasoning.isNotBlank()) && !(streaming && i == messages.size - 1)) {
                                             add(ChatFeedItem.AssistantFooter(i, msg))
                                         }
                                     }

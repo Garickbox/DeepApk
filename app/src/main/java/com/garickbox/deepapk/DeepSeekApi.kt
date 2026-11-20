@@ -16,7 +16,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 sealed class StreamEvent {
@@ -32,7 +31,8 @@ data class BalanceInfo(val isAvailable: Boolean, val text: String)
 object DeepSeekApi {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
     fun fetchBalance(apiKey: String): BalanceInfo? {
@@ -71,28 +71,12 @@ object DeepSeekApi {
     ): Flow<StreamEvent> = callbackFlow {
         var callRef: Call? = null
         val prepared = history
-            .filter { (it.role == "user" || it.role == "assistant") && it.content.isNotBlank() }
-            .toMutableList()
-
-        if (continuation) {
-            prepared.add(
-                Message(
-                    role = "user",
-                    content = "Продолжи ровно с места, где оборвался предыдущий ответ. Не повторяй уже написанное и не добавляй вступлений."
-                )
-            )
-        }
-
+            .filter { (it.role == "user" || it.role == "assistant") && (it.content.isNotBlank() || (it.role == "assistant" && it.reasoning.isNotBlank())) }
+            .map { if (it.role == "assistant" && it.content.isBlank()) it.copy(content = "[обрыв]") else it }.toMutableList()
+        if (continuation) prepared.add(Message(role = "user", content = if (prepared.lastOrNull()?.content == "[обрыв]") "Рассуждения оборвались. Сразу выдай ответ." else "Продолжи с места обрыва."))
         callRef = when (settings.provider) {
-            "gemini" -> streamGemini(settings, prepared)
-            "openrouter" -> streamOpenAiCompat(settings, prepared, "https://openrouter.ai/api/v1/chat/completions", settings.openrouterApiKey, settings.openrouterModel, false, true)
-            "groq" -> streamOpenAiCompat(settings, prepared, "https://api.groq.com/openai/v1/chat/completions", settings.groqApiKey, settings.groqModel, false, false)
-            "custom" -> {
-                val base = settings.customBaseUrl.trim().trimEnd('/')
-                val u = if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
-                streamOpenAiCompat(settings, prepared, u, settings.customApiKey, settings.customModel, false, false)
-            }
-            else -> streamOpenAiCompat(settings, prepared, "https://api.deepseek.com/chat/completions", settings.apiKey, if (settings.webSearchEnabled) "deepseek-flash" else settings.model, true, false)
+            "custom" -> { val b = settings.customBaseUrl.trim().trimEnd('/'); streamOpenAiCompat(settings, prepared, if (b.endsWith("/chat/completions")) b else "$b/chat/completions", settings.customApiKey, settings.customModel, false) }
+            else -> streamOpenAiCompat(settings, prepared, "https://api.deepseek.com/chat/completions", settings.apiKey, settings.model, true)
         }
         close()
         awaitClose { callRef?.cancel() }
@@ -100,7 +84,7 @@ object DeepSeekApi {
 
     private fun ProducerScope<StreamEvent>.streamOpenAiCompat(
         settings: AppSettings, history: List<Message>, endpointUrl: String,
-        rawKey: String, modelName: String, isDeepSeek: Boolean, isOpenRouter: Boolean
+        rawKey: String, modelName: String, isDirect: Boolean
     ): Call? {
         val key = rawKey.trim()
         if (key.isBlank()) { trySend(StreamEvent.Error("Не задан API-ключ (${settings.providerLabel()})")); return null }
@@ -108,25 +92,12 @@ object DeepSeekApi {
         val arr = JSONArray()
         if (settings.systemPrompt.isNotBlank()) arr.put(JSONObject().put("role", "system").put("content", settings.systemPrompt))
         history.forEach { arr.put(JSONObject().put("role", it.role).put("content", it.content)) }
-        val root = JSONObject()
-            .put("model", modelName.ifBlank { "deepseek-chat" }).put("messages", arr).put("stream", true)
-            .put("temperature", settings.temperature.toDouble())
-            .put("max_tokens", if (isDeepSeek) settings.maxTokens else settings.maxTokens.coerceAtMost(32768))
-        if (isDeepSeek) {
-            root.put("stream_options", JSONObject().put("include_usage", true))
-            root.put("thinking", JSONObject().put("type", if (settings.thinkingEnabled) "enabled" else "disabled"))
-            if (settings.webSearchEnabled) {
-                val tools = JSONArray()
-                tools.put(JSONObject().put("type", "deepseek_web_search"))
-                tools.put(JSONObject().put("type", "deepseek_read_url"))
-                root.put("tools", tools)
-            }
-        }
-        val body = root.toString().toRequestBody("application/json".toMediaType())
-        val rb = Request.Builder().url(endpointUrl).header("Authorization", "Bearer $key").header("Content-Type", "application/json")
-        if (isOpenRouter) rb.header("HTTP-Referer", "https://github.com/Garickbox/DeepApk").header("X-Title", "DeepApk")
-        val req = rb.post(body).build()
-
+        val root = JSONObject().put("model", modelName.ifBlank { "deepseek/deepseek-v4.1-flash-1017" }).put("messages", arr).put("stream", true)
+            .put("max_tokens", settings.maxTokens).put("stream_options", JSONObject().put("include_usage", true))
+            .put("thinking", JSONObject().put("type", if (settings.thinkingEnabled) "enabled" else "disabled"))
+        if (!settings.thinkingEnabled) root.put("temperature", settings.temperature.toDouble())
+        if (isDirect && settings.webSearchEnabled) root.put("tools", JSONArray().put(JSONObject().put("type", "deepseek_web_search")).put(JSONObject().put("type", "deepseek_read_url")))
+        val req = Request.Builder().url(endpointUrl).header("Authorization", "Bearer $key").header("Content-Type", "application/json").post(root.toString().toRequestBody("application/json".toMediaType())).build()
         val call = client.newCall(req)
         var lastUsage = ""
         var truncated = false
@@ -195,134 +166,5 @@ object DeepSeekApi {
         return call
     }
 
-    private fun ProducerScope<StreamEvent>.streamGemini(
-        settings: AppSettings,
-        history: List<Message>
-    ): Call? {
-        val key = settings.geminiApiKey.trim()
-        if (key.isBlank()) {
-            trySend(StreamEvent.Error("Не задан Gemini API Key"))
-            return null
-        }
 
-        val contents = JSONArray()
-        history.forEach { msg ->
-            val gRole = if (msg.role == "assistant") "model" else "user"
-            val lastIdx = contents.length() - 1
-            if (lastIdx >= 0 && contents.getJSONObject(lastIdx).optString("role") == gRole) {
-                val parts = contents.getJSONObject(lastIdx).getJSONArray("parts")
-                parts.put(JSONObject().put("text", msg.content))
-            } else {
-                contents.put(
-                    JSONObject()
-                        .put("role", gRole)
-                        .put("parts", JSONArray().put(JSONObject().put("text", msg.content)))
-                )
-            }
-        }
-
-        val genCfg = JSONObject()
-            .put("temperature", settings.temperature.toDouble())
-            .put("maxOutputTokens", settings.maxTokens.coerceAtMost(65536))
-
-        if (settings.thinkingEnabled &&
-            (settings.geminiModel.contains("2.5") || settings.geminiModel.contains("3") || settings.geminiModel.contains("-4"))
-        ) {
-            genCfg.put("thinkingConfig", JSONObject().put("includeThoughts", true))
-        }
-
-        val root = JSONObject()
-            .put("contents", contents)
-            .put("generationConfig", genCfg)
-
-        if (settings.systemPrompt.isNotBlank()) {
-            root.put(
-                "systemInstruction",
-                JSONObject().put("parts", JSONArray().put(JSONObject().put("text", settings.systemPrompt)))
-            )
-        }
-
-        if (settings.webSearchEnabled) {
-            root.put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
-        }
-
-        val encodedKey = URLEncoder.encode(key, "UTF-8")
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:streamGenerateContent?alt=sse&key=$encodedKey"
-        val req = Request.Builder()
-            .url(url)
-            .header("Content-Type", "application/json")
-            .post(root.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-
-        val call = client.newCall(req)
-        var lastUsage = ""
-        var truncated = false
-        try {
-            call.execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    val err = resp.body?.string()?.take(800) ?: ""
-                    trySend(StreamEvent.Error("Gemini API ${resp.code}: $err"))
-                } else {
-                    val stream = resp.body?.byteStream()
-                    if (stream == null) {
-                        trySend(StreamEvent.Error("Пустой ответ Gemini"))
-                    } else {
-                        BufferedReader(InputStreamReader(stream)).use { reader ->
-                            while (isActive) {
-                                val rawLine = reader.readLine() ?: break
-                                val l = rawLine.trim()
-                                if (!l.startsWith("data: ")) continue
-                                val json = l.removePrefix("data: ").trim()
-                                if (json == "[DONE]") break
-                                try {
-                                    val obj = JSONObject(json)
-                                    val errObj = obj.optJSONObject("error")
-                                    if (errObj != null) {
-                                        trySend(StreamEvent.Error(errObj.optString("message", "Gemini error")))
-                                        break
-                                    }
-                                    val um = obj.optJSONObject("usageMetadata")
-                                    if (um != null) {
-                                        val pTok = um.optInt("promptTokenCount", 0)
-                                        val cTok = um.optInt("candidatesTokenCount", 0)
-                                        if (pTok > 0 || cTok > 0) {
-                                            lastUsage = "↑$pTok ↓$cTok"
-                                        }
-                                    }
-                                    val cand = obj.optJSONArray("candidates")?.optJSONObject(0) ?: continue
-                                    val fr = cand.optString("finishReason", "")
-                                    if (fr == "MAX_TOKENS") truncated = true
-                                    val gm = cand.optJSONObject("groundingMetadata")
-                                    val qCount = gm?.optJSONArray("webSearchQueries")?.length() ?: 0
-                                    if (qCount > 0) trySend(StreamEvent.SearchInfo(qCount))
-
-                                    val parts = cand.optJSONObject("content")?.optJSONArray("parts") ?: continue
-                                    for (i in 0 until parts.length()) {
-                                        val part = parts.getJSONObject(i)
-                                        val txt = part.optString("text", "")
-                                        if (txt.isEmpty()) continue
-                                        if (part.optBoolean("thought", false)) {
-                                            trySend(StreamEvent.Reasoning(txt))
-                                        } else {
-                                            trySend(StreamEvent.Content(txt))
-                                        }
-                                    }
-                                } catch (_: Exception) {
-                                }
-                            }
-                        }
-                        if (isActive) {
-                            trySend(StreamEvent.Done(lastUsage, truncated))
-                        }
-                    }
-                }
-                Unit
-            }
-        } catch (e: Exception) {
-            if (isActive) {
-                trySend(StreamEvent.Error(e.message ?: "unknown"))
-            }
-        }
-        return call
-    }
 }
