@@ -5,17 +5,22 @@
 - `AndroidManifest.xml` — права (`INTERNET`, `RUN_COMMAND`, `REQUEST_INSTALL_PACKAGES`), `FileProvider`, фильтры `MAIN`, `SEND`/`SEND_MULTIPLE` и `VIEW` для `*.deepapk` (с `android:host="*"` + `android:pathSuffix=".deepapk"`).
 - `java/com/garickbox/deepapk/`:
   - `MainActivity.kt` — точка входа, тема (`DeepDarkColors`/`DeepLightColors`), роутинг `incomingShare` и `incomingSkill` (`.deepapk`).
-  - `ChatScreen.kt` — экран чата (~2300 строк), TopBar, лента `ChatFeedItem`, `startStream` (стриминг + авто-чтение SAF до 8 шагов + `skill_save`).
-  - `ChatDrawer.kt` — drawer сессий (`ChatDrawerSheet`, ~158 строк): поиск, список, удаление, кнопки настроек, баланс. **Вынесен из `ChatScreen.kt`.**
-  - `ChatHistory.kt` — `capHistory` + `MAX_HISTORY_CHARS = 500_000`. **Вынесен из `ChatScreen.kt`.**
-  - `UserAttachments.kt` — `splitUserAttachments` (сворачивает `[Файл: ...]` и папку SAF в чипсы). **Вынесен из `ChatScreen.kt`.**
-  - `ContextActions.kt` — `copyPlain`, `ContextMenuItem`, `ModePill`, `DeepWhaleLogo`. **Вынесен из `ChatScreen.kt`.**
+  - `ChatScreen.kt` — экран чата (~2810 строк), TopBar, лента `ChatFeedItem`, `startStream` (стриминг + авто-чтение SAF до 8 шагов + `skill_save`), единое окно `TermuxRunnerDialog` и выделение маркером (`Выбрать текст` → `▶ В Termux`).
+  - `ChatDrawer.kt` — drawer сессий (`ChatDrawerSheet`, ~180 строк): поиск, список, удаление, настройки, OCR-база, баланс.
+  - `ChatHistory.kt` — `capHistory` + `MAX_HISTORY_CHARS = 500_000`.
+  - `ChatWidgets.kt` и `ChatHelpers.kt` — `ContextMenuItem`, `ModePill`, `DeepWhaleLogo`, `copyPlain`.
+  - `ChipTextField.kt` — поле ввода с компактными чипсами вложений (`[Файл: ...]`, `💻` Termux).
+  - `UserAttachments.kt` — `splitUserAttachments` (сворачивает `[Файл: ...]`, папку SAF и `💻` Termux-вывод в чипсы).
+  - `ChatSafController.kt` и `ChatFsEditsBar.kt` — авто-чтение проекта по тегам SAF и плашка подтверждения правок (`✅ ОК / Отмена / diff`).
   - `ProjectFs.kt` — доступ к папке проекта через SAF (`DocumentsContract`), `listTree`, `grepProject`, `readFileLines` (до 180 строк), транзакционный `applyWithBackup` / `commitBackupOk` / `rollbackBackup`.
+  - `PatchPreview.kt` — предпросмотр diff/правок перед применением.
+  - `TermuxBridge.kt` — запуск скриптов в Termux (`RUN_COMMAND`), `isRunnableCodeBlock`, `detectInterpreter`, `readLogSmart` (начало + хвост лога), `TermuxJobHandle` + отмена по `.pid`, `cleanupOldJobs`.
+  - `MarkdownRenderer.kt` — парсер Markdown/кода/таблиц/`doc_report`; кнопка `▶ Termux` ставится только на исполняемые блоки (`TermuxBridge.isRunnableCodeBlock`), кнопки Открыть, Посмотреть, Скачать `.docx`.
   - `SkillPackage.kt` — формат `deepapk-skill-v1` (`.deepapk`), импорт из VIEW/SEND/диалога и экспорт через `FileProvider`.
-  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 11** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
+  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 13** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
   - `DocxEngine.kt` — генератор ГОСТ `.docx` из блока `doc_report` (OOXML ZIP, autofit-таблицы, svg в PNG, PAGE в колонтитуле, автосохранение HTML).
-  - `MarkdownRenderer.kt` — парсер Markdown/кода/таблиц/doc_report, кнопки Termux, Открыть, Посмотреть, Скачать .docx.
-  - `DeepSeekApi.kt`, `ChatStore.kt`, `SettingsStore.kt`, `SettingsScreen.kt`, `AttachmentHelper.kt`, `TermuxBridge.kt`, `UpdateChecker.kt`.
+  - `SettingsScreen.kt`, `SettingsDialogs.kt`, `SettingsStore.kt` — экран настроек, диалоги пресетов/скиллов/бэкапа и хранилище настроек.
+  - `DeepSeekApi.kt`, `ModelCatalog.kt`, `ChatStore.kt`, `AttachmentHelper.kt`, `OcrCache.kt`, `UpdateChecker.kt`.
 
 ## 2. ДОСТУП К КОДУ ЧЕРЕЗ SAF
 **Тег занимает ВСЁ сообщение целиком.** Перед тегом не должно быть ни одного символа: ни `>`, ни лупы, ни `SAF:`, ни `(N..M)`, ни бэктиков, ни пояснений. Нарушишь — DeepApk не распарсит тег и вернёт дерево или пусто. Путь всегда полный от корня репозитория. Один ответ — один тег.
@@ -41,7 +46,7 @@
   `cat <<'PY' > ~/deep_tmp/p.py` (короткий python-патч) + `bash ~/deep_go.sh ~/deep_tmp/p.py "commit msg"`.
   `deep_go.sh` сам снимает бэкап, применяет патч, гоняет `deepapk_guard.py`, при сбое откатывает правки + удаляет созданные новые файлы, коммитит только `app/src app/build.gradle.kts .github`, пушит в main и ждёт CI строго по `HEAD` SHA.
 - **Локальная сборка на телефоне (по запросу):** `bash ~/deep_build.sh` или `DEEP_LOCAL_BUILD=1 bash ~/deep_go.sh "msg"`. По умолчанию сборка идёт в GitHub CI (быстрее и не садит телефон). **Никогда не запускай `./gradlew` напрямую** — упадёт на aapt2.
-- **Ожидание CI + скачивание APK:** `bash ~/deep_watch.sh` (wget для обхода РКН; качает в `~/DeepApk/apk/DeepApk-build-$RNUM.apk`, при падении вызывает `timeout 60 bash ~/deep_err.sh`).
+- **Ожидание CI + скачивание APK:** `bash ~/deep_watch.sh` (wget для обхода РКН; качает в `~/deep_apks/DeepApk-build-$RNUM.apk`, при падении вызывает `timeout 60 bash ~/deep_err.sh`).
 - **Установка на телефон:** `bash ~/deep_install.sh` (через Shizuku `rish` или локальный ADB `~/deep_adb.sh 5555`).
 - **Перезапуск упавших jobs / скачивание полного лога CI:**
   `curl -X POST -H "Authorization: Bearer $TOK" "https://api.github.com/repos/Garickbox/DeepApk/actions/runs/$RUN/rerun-failed-jobs"`
@@ -59,11 +64,12 @@
 ## 4. ЧАСТЫЕ ГРАБЛИ ПРОЕКТА (НЕ ПОВТОРЯТЬ)
 - В Kotlin-строках нельзя 8-значный юникод-эскейп (нужны суррогаты UTF-16 или живые UTF-8 эмодзи), не ставь лишний слэш перед uXXXX в UI-строках.
 - В DocxEngine.kt выравнивание абзаца строго `left` (не `both`).
-- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **12**).
+- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **13**) в унисон с картой и разделом 4.
 - В AndroidManifest.xml фильтр pathSuffix требует `android:host="*"`.
+- В Compose у `BasicTextField` пиши `decorationBox = { inner ->` без явного типа `() -> Unit` (иначе runtime `ClassCastException: ComposableLambdaImpl`).
 - Не ломай imePadding / navigationBarsPadding, не используй continue внутри inline-лямбд (forEach), используй формат `[Файл: ...]` для сворачивания в чипс.
 - Если пользователь просит не писать код — отвечай без кода.
-- **Termux + aapt2:** ./gradlew напрямую на телефоне **не работает** — aapt2 из Gradle-кэша = x86_64 ELF, Bionic не запускает: `AAPT2 ... syntax error: unexpected '('`. Только через deep_build.sh. Если видишь эту ошибку — ты обошёл deep_build.sh, а не нашёл баг.
+- **Termux + aapt2:** `./gradlew` напрямую на телефоне **не работает** — aapt2 из Gradle-кэша = x86_64 ELF, Bionic не запускает: `AAPT2 ... syntax error: unexpected '('`. Локальную сборку запускай через `bash ~/deep_build.sh` (или `DEEP_LOCAL_BUILD=1`), по умолчанию же сборка идёт в GitHub CI через `bash ~/deep_go.sh`.
 - **pkill -f <pattern> убивает сам bash-скрипт**, если pattern встречается в теле скрипта (например `~/.gradle/caches`, `rm -rf ~/.gradle/daemon` при `pkill -f gradle`). Трюк `[g]radle` защищает только аргумент pkill, не тело скрипта. **Не использовать pkill -f в скриптах**, которые сами содержат это слово; лучше `ps | grep` для диагностики или `kill <PID>` по PID.
 - **`if bash X | tail -N; then`** — `$?` от tail, а не от bash. Использовать `set -o pipefail`, `${PIPESTATUS[0]}` или `bash X > $LOG 2>&1; RC=$?`.
 - **deep_err.sh / deep_watch.sh / любой wget** без --timeout **виснут** при плохой сети. Оборачивать: `timeout 60 bash ~/deep_err.sh`.
@@ -74,7 +80,7 @@
 
 ## 5. ПОРЯДОК РАБОТЫ НАД КРУПНЫМ РЕФАКТОРИНГОМ
 - Разбивай на **мелкие шаги** (одна группа диалогов / один файл / одна функция за раз).
-- **Один шаг** = один патч/write → ждать ✅ ОК пользователя → `bash ~/deep_go.sh "msg"` → дождаться зелёного CI → проверить руками → только потом следующий.
+- **Один шаг** = один патч (`~/deep_tmp/p.py` → `bash ~/deep_go.sh ~/deep_tmp/p.py "msg"`, либо `<fs_patch>` → ждать ✅ ОК → `bash ~/deep_go.sh "msg"`) → дождаться зелёного CI → проверить руками → только потом следующий.
 - Не пихать 400-500 строк в один коммит: если CI упадёт, непонятно, что именно сломалось.
 - Перед патчем — read актуальных строк (номера сдвигаются от прошлых правок, особенно ChatScreen.kt).
 - Тесты (app/src/test/...) держат API вынесенных функций — при выносе проверять визибилити (internal, не private).
