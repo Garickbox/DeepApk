@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -22,15 +21,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -52,7 +52,7 @@ fun ChipTextField(
     cursorColor: Color = DeepSeekBlue
 ) {
     val annotated = remember(value) { buildChipAnnotated(value) }
-    val inlineContent = remember(value) { buildInlineContent(value) }
+    val inlineContent = buildInlineContent(value)
     var tfv by remember { mutableStateOf(TextFieldValue(annotated, selection = TextRange(value.length))) }
 
     LaunchedEffect(value) {
@@ -63,7 +63,7 @@ fun ChipTextField(
 
     BasicTextField(
         value = tfv,
-        onValueChange = { new ->
+        onValueChange = { new: TextFieldValue ->
             tfv = new
             onValueChange(new.text)
         },
@@ -72,7 +72,7 @@ fun ChipTextField(
         textStyle = TextStyle(color = textColor, fontSize = fontSizeSp.sp, lineHeight = lineHeightSp.sp),
         cursorBrush = SolidColor(cursorColor),
         inlineContent = inlineContent,
-        decorationBox = { inner ->
+        decorationBox = { inner: @Composable () -> Unit ->
             Box(Modifier.fillMaxWidth()) {
                 if (value.isEmpty() && placeholder.isNotBlank()) {
                     Text(placeholder, fontSize = fontSizeSp.sp, color = textColor.copy(alpha = 0.5f))
@@ -85,7 +85,7 @@ fun ChipTextField(
 
 private val CHIP_REGEX = Regex("""\[Файл: ([^\]]+)\]\n```[^\n]*\n([\s\S]*?)\n```""")
 
-private fun buildChipAnnotated(text: String): androidx.compose.ui.text.AnnotatedString = buildAnnotatedString {
+private fun buildChipAnnotated(text: String): AnnotatedString = buildAnnotatedString {
     var last = 0
     CHIP_REGEX.findAll(text).forEach { m ->
         append(text.substring(last, m.range.first))
@@ -108,8 +108,8 @@ private fun buildInlineContent(text: String): Map<String, InlineTextContent> {
         val chipWidth = (name.length * 7 + 40).coerceIn(80, 320)
         map[chipId] = InlineTextContent(
             Placeholder(
-                width = chipWidth.dp,
-                height = 24.dp,
+                width = chipWidth.sp,
+                height = 24.sp,
                 placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
             )
         ) {
