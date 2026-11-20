@@ -171,8 +171,6 @@ fun ChatScreen(
     var addSkillDraft by remember { mutableStateOf<String?>(null) }
     var projectLabel by remember { mutableStateOf(ProjectFs.getLabel(ctx)) }
     var projectAutoRead by remember { mutableStateOf(ProjectFs.isEnabled(ctx)) }
-    var backupFilesCount by remember { mutableStateOf(ProjectFs.activeBackupCount(ctx)) }
-    var pendingFsEdits by remember { mutableStateOf<List<FsWriteOp>>(emptyList()) }
     var showProjectFsDialog by remember { mutableStateOf(false) }
     var showOcrBaseDialog by remember { mutableStateOf(false) }
     var ocrBusy by remember { mutableStateOf(false) }
@@ -501,7 +499,18 @@ fun ChatScreen(
                         }
                     }
                     val writeOps = ProjectFs.extractWriteOps(last.content)
-                    if (ProjectFs.isReady(ctx) && writeOps.isNotEmpty()) pendingFsEdits = writeOps
+                    if (ProjectFs.isReady(ctx) && writeOps.isNotEmpty()) {
+                        val wRes = try {
+                            withContext(Dispatchers.IO) { ProjectFs.applyDirect(ctx, writeOps) }
+                        } catch (e: Throwable) {
+                            FsApplyResult(false, "Ошибка применения: " + (e.message ?: e.javaClass.simpleName))
+                        }
+                        if (wRes.ok) {
+                            Toast.makeText(ctx, wRes.message, Toast.LENGTH_SHORT).show()
+                        } else {
+                            error = wRes.message
+                        }
+                    }
                     if (!wasCancelled && !cancelRequested && continueTargetIdx == null && projectAutoRead && ProjectFs.isReady(ctx) && toolDepth < ChatSafController.SAF_MAX_TOOL_DEPTH) {
                         val readOps = ProjectFs.extractReadOps(last.content)
                         if (readOps.isNotEmpty()) {
@@ -901,72 +910,6 @@ fun ChatScreen(
                     }
                 }
 
-                if (backupFilesCount > 0) {
-                    Surface(
-                        color = if (isDark) Color(0xFF2B2518) else Color(0xFFFFF8E1),
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 3.dp),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "🛡 Бэкап активен ($backupFilesCount файл.)",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = if (isDark) Color(0xFFFFD54F) else Color(0xFF7A4F01),
-                                modifier = Modifier.weight(1f)
-                            )
-                            TextButton(
-                                onClick = {
-                                    ProjectFs.commitBackupOk(ctx)
-                                    backupFilesCount = 0
-                                    Toast.makeText(ctx, "Бэкап удалён", Toast.LENGTH_SHORT).show()
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                            ) { Text("✅ ОК", fontSize = 12.sp, color = Color(0xFF2E7D32)) }
-                            TextButton(
-                                onClick = {
-                                    scope.launch {
-                                        val res = withContext(Dispatchers.IO) { ProjectFs.rollbackBackup(ctx) }
-                                        backupFilesCount = ProjectFs.activeBackupCount(ctx)
-                                        Toast.makeText(ctx, res.message, Toast.LENGTH_SHORT).show()
-                                        if (res.ok && input.isBlank()) {
-                                            input = "Правка не прошла проверку — я откатил изменения (${res.modifiedFiles.joinToString(", ")}). Ниже ошибка сборки/работы, подумай и предложи исправленный вариант:\n"
-                                        }
-                                    }
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                            ) { Text("↩️ Откат", fontSize = 12.sp, color = Color(0xFFC62828)) }
-                        }
-                    }
-                }
-
-                if (pendingFsEdits.isNotEmpty()) {
-                    PendingFsEditsBar(
-                        edits = pendingFsEdits,
-                        isDark = isDark,
-                        onApply = {
-                            val ops = pendingFsEdits
-                            pendingFsEdits = emptyList()  // закрыть бар сразу — независимо от исхода
-                            scope.launch {
-                                val res = try {
-                                    withContext(Dispatchers.IO) { ProjectFs.applyWithBackup(ctx, ops) }
-                                } catch (e: Throwable) {
-                                    FsApplyResult(false, "Ошибка применения: " + (e.message ?: e.javaClass.simpleName))
-                                }
-                                backupFilesCount = ProjectFs.activeBackupCount(ctx)
-                                if (res.ok) {
-                                    Toast.makeText(ctx, res.message, Toast.LENGTH_SHORT).show()
-                                } else {
-                                    error = res.message
-                                }
-                            }
-                        },
-                        onDismiss = { pendingFsEdits = emptyList() }
-                    )
-                }
 
                 if (safStatus.isNotBlank()) {
                     Surface(color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
@@ -2169,14 +2112,6 @@ fun ChatScreen(
                                 projectAutoRead = it
                                 ProjectFs.setEnabled(ctx, it)
                             }
-                        )
-                    }
-                    if (backupFilesCount > 0) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "Активный бэкап: ${ProjectFs.activeBackupFiles(ctx).joinToString(", ")}",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Spacer(Modifier.height(12.dp))

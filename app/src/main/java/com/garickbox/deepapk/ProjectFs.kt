@@ -88,16 +88,13 @@ object ProjectFs {
 
     fun systemPromptAddendum(ctx: Context): String {
         val label = getLabel(ctx).ifBlank { "Проект" }
-        val bak = activeBackupCount(ctx)
-        val bakNote = if (bak > 0) " Внимание: сейчас активен бэкап прошлой правки ($bak файл.) — не предлагай новые правки, пока пользователь не проверит текущую." else ""
         return "ДОСТУП К ПРОЕКТУ (SAF, папка «$label»): подключены реальные исходники.\n" +
             "Не гадай и не проси юзера гонять grep — сразу выводи до 4 тегов (пути только реальные из fs_tree/fs_grep):\n" +
             "- <fs_tree/> или <fs_tree path=\"РЕАЛЬНАЯ_ПАПКА\"/>\n" +
             "- <fs_grep pattern=\"ТЕКСТ\" path=\"РЕАЛЬНАЯ_ПАПКА\"/>\n" +
             "- <fs_read path=\"РЕАЛЬНЫЙ_ФАЙЛ\" start=\"1\" end=\"180\"/>\n" +
             "Правка в SAF: <fs_patch path=\"РЕАЛЬНЫЙ_ФАЙЛ\"><old>ТОЧНЫЙ_ФРАГМЕНТ</old><new>НОВЫЙ_КОД</new></fs_patch> или <fs_write path=\"РЕАЛЬНЫЙ_ФАЙЛ\">КОД</fs_write>.\n" +
-            "📚 КНИГИ/OCR: при вопросе про книгу/PDF сначала проверь \".ocr\" через <fs_tree path=\".ocr\"/> и <fs_grep pattern=\"СЛОВО\" path=\".ocr\"/> (внутри _name.txt и page_NNNNN.md)." +
-            (if (bakNote.isNotEmpty()) "\n" + bakNote.trim() else "")
+            "📚 КНИГИ/OCR: при вопросе про книгу/PDF сначала проверь \".ocr\" через <fs_tree path=\".ocr\"/> и <fs_grep pattern=\"СЛОВО\" path=\".ocr\"/> (внутри _name.txt и page_NNNNN.md)."
     }
 
     internal fun sanitizeRelPath(raw: String): String? {
@@ -482,24 +479,6 @@ object ProjectFs {
         return out.sortedBy { it.first }.map { it.second }
     }
 
-    private fun backupDir(ctx: Context): File = File(ctx.filesDir, "fs_backups")
-    private fun backupIndexFile(ctx: Context): File = File(backupDir(ctx), "active.json")
-
-    fun activeBackupCount(ctx: Context): Int {
-        val f = backupIndexFile(ctx)
-        if (!f.exists()) return 0
-        return try { JSONArray(f.readText()).length() } catch (_: Exception) { 0 }
-    }
-
-    fun activeBackupFiles(ctx: Context): List<String> {
-        val f = backupIndexFile(ctx)
-        if (!f.exists()) return emptyList()
-        return try {
-            val arr = JSONArray(f.readText())
-            (0 until arr.length()).mapNotNull { arr.getJSONObject(it).optString("path").takeIf { p -> p.isNotBlank() } }
-        } catch (_: Exception) { emptyList() }
-    }
-
     internal fun countOccurrences(haystack: String, needle: String): Int {
         if (needle.isEmpty()) return 0
         var count = 0
@@ -513,18 +492,17 @@ object ProjectFs {
         return count
     }
 
-    fun applyWithBackup(ctx: Context, ops: List<FsWriteOp>): FsApplyResult = try {
-        applyWithBackupInternal(ctx, ops)
+    fun applyDirect(ctx: Context, ops: List<FsWriteOp>): FsApplyResult = try {
+        applyDirectInternal(ctx, ops)
     } catch (e: Throwable) {
-        Log.e("DeepApk", "applyWithBackup crashed: " + e.javaClass.simpleName + ": " + e.message, e)
+        Log.e("DeepApk", "applyDirect crashed: " + e.javaClass.simpleName + ": " + e.message, e)
         FsApplyResult(false, "Ошибка применения: " + (e.message ?: e.javaClass.simpleName))
     }
 
-    private fun applyWithBackupInternal(ctx: Context, ops: List<FsWriteOp>): FsApplyResult {
+    private fun applyDirectInternal(ctx: Context, ops: List<FsWriteOp>): FsApplyResult {
         val treeUri = getTreeUri(ctx) ?: return FsApplyResult(false, "Папка проекта не подключена")
         if (ops.isEmpty()) return FsApplyResult(false, "Нет операций для применения")
 
-        val staged = mutableListOf<Triple<String, DocEntry?, ByteArray>>()
         val newContents = mutableMapOf<String, String>()
 
         // 1. Dry-run & validate all anchors before touching a single file
@@ -554,45 +532,14 @@ object ProjectFs {
                         working = working.replaceFirst(oldNorm, newNorm)
                     }
                     newContents[cleanPath] = working
-                    if (staged.none { it.first == cleanPath }) staged.add(Triple(cleanPath, doc, origBytes))
                 }
                 is FsWriteOp.Write -> {
-                    val doc = findDoc(ctx, treeUri, cleanPath)
-                    val origBytes = if (doc != null && !doc.isDir) {
-                        readBytesDoc(ctx, treeUri, doc.docId) ?: ByteArray(0)
-                    } else ByteArray(0)
                     newContents[cleanPath] = op.content.replace("\r\n", "\n")
-                    if (staged.none { it.first == cleanPath }) staged.add(Triple(cleanPath, doc, origBytes))
                 }
             }
         }
 
-        // 2. Save backups first (preserve earliest pre-session snapshot if active.json already exists)
-        val bDir = backupDir(ctx)
-        val bFilesDir = File(bDir, "files").apply { mkdirs() }
-        val arr = try {
-            val idxF = backupIndexFile(ctx)
-            if (idxF.exists()) JSONArray(idxF.readText()) else JSONArray()
-        } catch (_: Exception) { JSONArray() }
-        val alreadyBacked = (0 until arr.length()).mapNotNull { arr.getJSONObject(it).optString("path") }.toMutableSet()
-
-        staged.forEachIndexed { idx, (relPath, doc, origBytes) ->
-            if (relPath !in alreadyBacked) {
-                val bakFileName = "bak_${System.currentTimeMillis()}_$idx.bin"
-                val existed = doc != null
-                if (existed) File(bFilesDir, bakFileName).writeBytes(origBytes)
-                arr.put(
-                    JSONObject()
-                        .put("path", relPath)
-                        .put("existed", existed)
-                        .put("bak", bakFileName)
-                )
-                alreadyBacked.add(relPath)
-            }
-        }
-        backupIndexFile(ctx).writeText(arr.toString())
-
-        // 3. Apply changes
+        // 2. Apply changes
         val applied = mutableListOf<String>()
         for ((relPath, content) in newContents) {
             val ensured = ensureFileDoc(ctx, treeUri, relPath)
@@ -601,54 +548,9 @@ object ProjectFs {
             if (!ok) return FsApplyResult(false, "Ошибка записи в SAF: $relPath")
             applied.add(relPath)
         }
-        return FsApplyResult(true, "Применено (${applied.size} файл.), бэкап сохранён", applied)
+        return FsApplyResult(true, "Применено (${applied.size} файл.)", applied)
     }
 
-    fun commitBackupOk(ctx: Context) {
-        try { backupDir(ctx).deleteRecursively() } catch (e: Exception) {
-            Log.w("DeepApk", "commitBackupOk delete failed: ${e.message}")
-        }
-    }
-
-    fun rollbackBackup(ctx: Context): FsApplyResult {
-        val treeUri = getTreeUri(ctx) ?: return FsApplyResult(false, "Папка проекта не подключена")
-        val f = backupIndexFile(ctx)
-        if (!f.exists()) return FsApplyResult(false, "Активный бэкап не найден")
-        return try {
-            val arr = JSONArray(f.readText())
-            val bFilesDir = File(backupDir(ctx), "files")
-            val restored = mutableListOf<String>()
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                val path = o.optString("path")
-                val existed = o.optBoolean("existed", true)
-                val bak = o.optString("bak")
-                val doc = findDoc(ctx, treeUri, path)
-                if (existed) {
-                    val bytes = File(bFilesDir, bak).takeIf { it.exists() }?.readBytes() ?: continue
-                    val target = doc ?: ensureFileDoc(ctx, treeUri, path)?.first ?: continue
-                    writeBytesDoc(ctx, treeUri, target.docId, bytes)
-                    restored.add(path)
-                } else if (doc != null) {
-                    val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, doc.docId)
-                    try { DocumentsContract.deleteDocument(ctx.contentResolver, uri) } catch (e: Exception) {
-                        Log.w("DeepApk", "deleteDocument($path) failed: ${e.message}")
-                    }
-                    restored.add("$path (удалён)")
-                }
-            }
-            backupDir(ctx).deleteRecursively()
-            FsApplyResult(true, "Откат выполнен (${restored.size} файл.)", restored)
-        } catch (ce: CancellationException) {
-            throw ce
-        } catch (se: SecurityException) {
-            Log.e("DeepApk", "rollbackBackup SecurityException", se)
-            FsApplyResult(false, "Ошибка отката (SecurityException): ${se.message}")
-        } catch (te: Throwable) {
-            Log.e("DeepApk", "rollbackBackup failed: ${te.javaClass.simpleName}: ${te.message}", te)
-            FsApplyResult(false, "Ошибка отката: ${te.message}")
-        }
-    }
 }
 
 // ===== DSML tolerance (DeepSeek tool-call tokens) =====
