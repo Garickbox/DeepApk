@@ -34,63 +34,32 @@
 4. Патч/write — это тег в чате, а не выполнение: DeepApk на телефоне парсит их и показывает кнопку ✅ ОК; пока не нажата (или пока висит бэкап прошлой правки) — файл не изменён. Перед повторной правкой проверяй факт через ls/git status/git diff.
 
 ## 3. РЕАЛЬНЫЕ СКРИПТЫ TERMUX, БЭКАП И ОТКАТ
-- **Временная папка:** ТОЛЬКО `~/deep_tmp/` (никогда системный tmp!).
-- **Уведомления:** `~/.jec_notify` (toast, vib, notif, say).
-- **Токен GitHub:** лежит в `~/.gh_token` (одна строка вида ghp_...). Для API — `TOK=$(tr -d '\n\r ' < ~/.gh_token)`. gh CLI не подходит (нужен read:org), а curl с токеном работает.
-- **Сборка и проверка:** `bash ~/deep_build.sh` (внутри `python3 ~/deepapk_guard.py` и compileDebugKotlin с Termux-override aapt2 и `--max-workers=2`). **Никогда не запускай `./gradlew` напрямую** — упадёт на aapt2 (см. § 4).
-- **Полный релиз-цикл:** `bash ~/deep_go.sh "commit msg"` (проверяет сборку, git add **только** `app/src app/build.gradle.kts .github`, push и запускает `deep_watch.sh`). Никакого `git add -A`!
-- **Ожидание CI + скачивание APK:** `bash ~/deep_watch.sh` (использует wget для обхода РКН; качает в `~/DeepApk/apk/DeepApk-build-$RNUM.apk`, при падении вызывает `bash ~/deep_err.sh`).
-- **Разбор упавшего CI:** `bash ~/deep_err.sh [run_id]` (без аргумента берёт последний failure). Внутри wget **без --timeout** → на плохой сети может зависнуть, оборачивай: `timeout 60 bash ~/deep_err.sh`.
-- **Перезапуск только упавших jobs (без нового коммита):**
-  `curl -X POST -H "Authorization: Bearer $TOK" "https://api.github.com/repos/Garickbox/DeepApk/actions/runs/$RUN/rerun-failed-jobs"` — HTTP 201 = ok.
-- **Скачать полный лог CI-job:**
-  `curl -sL --max-time 60 -H "Authorization: Bearer $TOK" "https://api.github.com/repos/Garickbox/DeepApk/actions/jobs/$JID/logs" -o log.txt`.
-- **Установка по ADB:** `bash ~/deep_install.sh`. Если INSTALL_FAILED_VERSION_DOWNGRADE — ставишь старый APK (проверь versionCode).
-- **Монолитные bash-патчи в чат:**
-  1. Сначала точечная диагностика, если код ещё не прочитан.
-  2. Один копируемый bash-блок без nano/vim, обёрнутый в `{ ... } 2>&1 | tee ~/log.txt` + `termux-clipboard-set < ~/log.txt || true` (большие дампы в `/sdcard/Download/*.txt`).
-  3. В Python — raw-строки через тройные кавычки (чтобы escape U/u не ломал текст), проверка `assert cnt == expected`, не писать литеральные тройные бэктики внутри bash-блоков (использовать `BT3 = chr(96) * 3`).
-  4. Бэкап в `~/deep_tmp/bak_$$` до правок; если deepapk_guard.py + deep_build.sh зелёные — удаляй бэкап; если промах — автооткат без commit/push.
+- **Временная папка:** ТОЛЬКО `~/deep_tmp/` (никогда системный каталог!).
+- **Уведомления:** `~/.jec_notify` (неблокирующие toast, vib, notif, say в фоне).
+- **Токен GitHub:** лежит в `~/.gh_token` (одна строка вида ghp_...). Для API — `TOK=$(tr -d '\n\r ' < ~/.gh_token)`.
+- **Патч и облачный CI в один шаг (основной способ):**
+  `cat <<'PY' > ~/deep_tmp/p.py` (короткий python-патч) + `bash ~/deep_go.sh ~/deep_tmp/p.py "commit msg"`.
+  `deep_go.sh` сам снимает бэкап, применяет патч, гоняет `deepapk_guard.py`, при сбое откатывает правки + удаляет созданные новые файлы, коммитит только `app/src app/build.gradle.kts .github`, пушит в main и ждёт CI строго по `HEAD` SHA.
+- **Локальная сборка на телефоне (по запросу):** `bash ~/deep_build.sh` или `DEEP_LOCAL_BUILD=1 bash ~/deep_go.sh "msg"`. По умолчанию сборка идёт в GitHub CI (быстрее и не садит телефон). **Никогда не запускай `./gradlew` напрямую** — упадёт на aapt2.
+- **Ожидание CI + скачивание APK:** `bash ~/deep_watch.sh` (wget для обхода РКН; качает в `~/DeepApk/apk/DeepApk-build-$RNUM.apk`, при падении вызывает `timeout 60 bash ~/deep_err.sh`).
+- **Установка на телефон:** `bash ~/deep_install.sh` (через Shizuku `rish` или локальный ADB `~/deep_adb.sh 5555`).
+- **Перезапуск упавших jobs / скачивание полного лога CI:**
+  `curl -X POST -H "Authorization: Bearer $TOK" "https://api.github.com/repos/Garickbox/DeepApk/actions/runs/$RUN/rerun-failed-jobs"`
+  `curl -sL --max-time 60 -H "Authorization: Bearer $TOK" "https://api.github.com/repos/Garickbox/DeepApk/actions/jobs/$JID/logs" -o ~/deep_tmp/ci.log`
+- **Правила патчей в чат:**
+  1. Сначала точечное чтение файла (не угадывай строки!).
+  2. Не пиши вручную `bak_$$` / `trap rollback` / `git add` — используй `~/deep_tmp/p.py` + `bash ~/deep_go.sh ~/deep_tmp/p.py "msg"`.
+  3. В Python — raw-строки `r'''...'''`, проверка `assert cnt == expected`, не пиши литеральные ``` внутри bash-блоков (`BT3 = chr(96) * 3`), и НИКОГДА не сокращай код через `...`.
 
 ## 3.5. КОГДА ИСПОЛЬЗОВАТЬ ```bash (и другие языки)
 
-**Правило:** кнопка `▶ Termux` появляется на **каждом** блоке ```bash / ```sh / ```python.
-Значит эти блоки — **только для скриптов, которые надо выполнить**.
-
-| Что пишешь | Язык блока |
-|---|---|
-| Скрипт для запуска (bash/python) | ```bash / ```python |
-| Пример кода (не для запуска) | ```text |
-| Фрагмент (одна строка, часть) | ```text |
-| Команда для ручного ввода в Termux | ```bash (это команда, её можно выполнить) |
-| Вывод скрипта (результат) | ```text |
-| Конфиг (yaml/json/toml) | ```yaml / ```json / ```toml |
-| Kotlin/Java/JS код | ```kotlin / ```java / ```js |
-
-**Плохо** (пример, не для запуска → ▶ Termux зря):
-```bash
-echo "hello"
-```
-
-**Хорошо** (пример, только Копировать):
-```text
-echo "hello"
-```
-
-**Хорошо** (скрипт, ▶ Termux уместен):
-```bash
-#!/bin/bash
-date
-uname
-uptime
-```
-
-**Правило простое:** если пользователь может тапнуть `▶ Termux` и это **имеет смысл** — пиши ```bash. Если это **иллюстрация** — пиши ```text.
+**Правило:** кнопка `▶ Termux` появляется только на исполняемых блоках (```bash / ```sh / ```python).
+Скрипт для выполнения пиши в ```bash или ```python, а примеры кода, фрагменты, вывод консоли и diff — строго в ```text / ```kotlin / ```json.
 
 ## 4. ЧАСТЫЕ ГРАБЛИ ПРОЕКТА (НЕ ПОВТОРЯТЬ)
 - В Kotlin-строках нельзя 8-значный юникод-эскейп (нужны суррогаты UTF-16 или живые UTF-8 эмодзи), не ставь лишний слэш перед uXXXX в UI-строках.
 - В DocxEngine.kt выравнивание абзаца строго `left` (не `both`).
-- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **11**).
+- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **12**).
 - В AndroidManifest.xml фильтр pathSuffix требует `android:host="*"`.
 - Не ломай imePadding / navigationBarsPadding, не используй continue внутри inline-лямбд (forEach), используй формат `[Файл: ...]` для сворачивания в чипс.
 - Если пользователь просит не писать код — отвечай без кода.

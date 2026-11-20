@@ -6,6 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.TypedValue
+import android.view.ActionMode
+import android.view.Menu
+import android.view.MenuItem
 import android.view.ViewGroup
 import android.widget.ScrollView
 import android.widget.TextView
@@ -71,6 +74,19 @@ private sealed class ChatFeedItem(val key: String) {
         ChatFeedItem("b_${msg.id}_$blockIdx")
     data class AssistantFooter(val msgIdx: Int, val msg: Message) : ChatFeedItem("f_${msg.id}")
 }
+
+private data class TermuxRunnerState(
+    val script: String,
+    val interpreter: String,
+    val running: Boolean = false,
+    val elapsedSec: Int = 0,
+    val statusLine: String = "",
+    val liveTail: String = "",
+    val exitCode: Int? = null,
+    val durationSec: Int = 0,
+    val resultBody: String = "",
+    val jobHandle: TermuxJobHandle? = null
+)
 
 private const val SECTOR_SIZE = 28
 private const val SECTOR_STEP = 20
@@ -142,6 +158,7 @@ fun ChatScreen(
     var contextMenuMsg by remember { mutableStateOf<Message?>(null) }
     var selectTextMsg by remember { mutableStateOf<Message?>(null) }
     var codePickerBlocks by remember { mutableStateOf<List<MdBlock.Code>?>(null) }
+    var termuxRunner by remember { mutableStateOf<TermuxRunnerState?>(null) }
     var showAnchorsDialog by remember { mutableStateOf(false) }
     var presets by remember { mutableStateOf(PresetStore.load(ctx)) }
     var activePresetId by remember {
@@ -592,7 +609,7 @@ fun ChatScreen(
             if (typed.isNotEmpty()) append(typed)
             attachments.forEach { f ->
                 if (isNotEmpty()) append("\n\n")
-                val ext = f.name.substringAfterLast('.', "").lowercase()
+                val ext = if (f.name.startsWith("\uD83D\uDCBB ")) "text" else f.name.substringAfterLast('.', "").lowercase()
                 val fence = if (f.content.contains("```")) "````" else "```"
                 append("[Файл: ${f.name}]\n$fence$ext\n${f.content}\n$fence")
             }
@@ -613,11 +630,85 @@ fun ChatScreen(
         startStream(scrollAnchorIdx = messages.size - 1)
     }
 
+    fun startTermuxRunner(overrideState: TermuxRunnerState? = null) {
+        val cur = overrideState ?: termuxRunner ?: return
+        if (cur.running) return
+        val code = cur.script.trim()
+        if (code.isBlank()) {
+            Toast.makeText(ctx, "Пустой скрипт", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val handle = TermuxJobHandle()
+        termuxRunner = cur.copy(
+            running = true,
+            elapsedSec = 0,
+            statusLine = "Запуск ${cur.interpreter}…",
+            liveTail = "",
+            exitCode = null,
+            resultBody = "",
+            jobHandle = handle
+        )
+        scope.launch {
+            TermuxBridge.runScriptAndWatch(
+                ctx = ctx,
+                scriptText = code,
+                interpreter = cur.interpreter,
+                jobHandle = handle,
+                onLogTail = { tailText ->
+                    val r = termuxRunner
+                    if (r != null && r.jobHandle == handle) {
+                        termuxRunner = r.copy(liveTail = tailText)
+                    }
+                },
+                onTick = { elapsed, tail ->
+                    val r = termuxRunner
+                    if (r != null && r.jobHandle == handle) {
+                        termuxRunner = r.copy(
+                            elapsedSec = elapsed,
+                            statusLine = "⏳ ${elapsed}с · ${tail.take(80)}"
+                        )
+                    }
+                },
+                onDone = { exitCode, body, dur ->
+                    val r = termuxRunner
+                    if (r != null && r.jobHandle == handle) {
+                        val txt = body.trim().ifBlank { "(пусто)" }
+                        termuxRunner = r.copy(
+                            running = false,
+                            elapsedSec = dur,
+                            exitCode = exitCode,
+                            durationSec = dur,
+                            resultBody = txt,
+                            liveTail = txt,
+                            statusLine = if (exitCode == 0) "✅ Готово · ${dur}с" else "⚠️ exit=$exitCode · ${dur}с",
+                            jobHandle = null
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun openTermuxRunner(lang: String, code: String, autoStart: Boolean = true) {
+        val clean = code.trim()
+        if (clean.isBlank()) {
+            Toast.makeText(ctx, "Пустой скрипт", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val interp = TermuxBridge.detectInterpreter(lang, clean)
+        val initial = TermuxRunnerState(script = clean, interpreter = interp)
+        termuxRunner = initial
+        if (autoStart && TermuxBridge.hasRunPermission(ctx)) {
+            startTermuxRunner(initial)
+        }
+    }
+
     fun handleSendMessageToTermux(content: String) {
-        val blocks = TermuxBridge.extractAllCodeBlocks(content)
+        val runnable = TermuxBridge.extractRunnableCodeBlocks(content)
+        val blocks = runnable.ifEmpty { TermuxBridge.extractAllCodeBlocks(content) }
         when {
-            blocks.isEmpty() -> Toast.makeText(ctx, "Нет блоков кода", Toast.LENGTH_SHORT).show()
-            blocks.size == 1 -> TermuxBridge.sendCodeToTermux(ctx, blocks[0].lang, blocks[0].code)
+            blocks.isEmpty() -> Toast.makeText(ctx, "Нет блоков кода — используй Выбрать текст", Toast.LENGTH_SHORT).show()
+            blocks.size == 1 -> openTermuxRunner(blocks[0].lang, blocks[0].code, autoStart = true)
             else -> codePickerBlocks = blocks
         }
     }
@@ -1154,43 +1245,7 @@ fun ChatScreen(
                                                 fontSizeSp = settings.fontSizeSp,
                                                 onCopyCode = { _, code -> copyPlain(ctx, code, "Код скопирован") },
                                                 onCopyTermux = { lang, code ->
-                                                    val lower = lang.lowercase().trim()
-                                                    val isShell = lower in listOf("", "sh", "bash", "zsh", "shell")
-                                                    val isPython = lower in listOf("py", "python", "python3")
-                                                    when {
-                                                        !isShell && !isPython -> TermuxBridge.sendCodeToTermux(ctx, lang, code)
-                                                        code.isBlank() -> {
-                                                            val w = "[\u26A0\uFE0F Пустой скрипт]"
-                                                            input = if (input.isBlank()) w else input + "\n\n" + w
-                                                        }
-                                                        !TermuxBridge.hasRunPermission(ctx) -> {
-                                                            val w = "[\u26A0\uFE0F Нет разрешения RUN_COMMAND. Настройки \u2192 Termux \u2192 Прямой запуск команд \u2192 Разрешить]"
-                                                            input = if (input.isBlank()) w else input + "\n\n" + w
-                                                        }
-                                                        else -> {
-                                                            scope.launch {
-                                                                safStatus = if (isPython) "\u23F3 Termux: python\u2026" else "\u23F3 Termux: bash\u2026"
-                                                                TermuxBridge.runScriptAndWatch(
-                                                                    ctx = ctx,
-                                                                    scriptText = code,
-                                                                    interpreter = if (isPython) "python3" else "bash",
-                                                                    onTick = { elapsed, tail ->
-                                                                        safStatus = "\u23F3 Termux " + elapsed + "\u0441 \u00B7 " + tail.take(60)
-                                                                    },
-                                                                    onDone = { exitCode, body, dur ->
-                                                                        safStatus = ""
-                                                                        val icon = if (exitCode == 0) "\u2705" else "\u26A0\uFE0F"
-                                                                        val tag = if (isPython) "python" else "bash"
-                                                                        val txt = body.trim().ifBlank { "(пусто)" }
-                                                                        val fence = "\u0060\u0060\u0060"
-                                                                        val safeName = "[Файл: \uD83D\uDCBB " + tag + " " + icon + " exit=" + exitCode + " \u00B7 " + dur + "\u0441]"
-                                                                        val block = safeName + "\n" + fence + "\n" + txt + "\n" + fence
-                                                                        input = if (input.isBlank()) block else input + "\n\n" + block
-                                                                    }
-                                                                )
-                                                            }
-                                                        }
-                                                    }
+                                                    openTermuxRunner(lang, code, autoStart = true)
                                                 },
                                                 onCopyTable = { txt, toast -> copyPlain(ctx, txt, toast) },
                                                 onOpenHtml = { raw ->
@@ -1447,13 +1502,23 @@ fun ChatScreen(
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
                                     color = MaterialTheme.colorScheme.surface,
-                                    border = BorderStroke(1.dp, cardBorder)
+                                    border = BorderStroke(1.dp, if (f.name.startsWith("\uD83D\uDCBB ")) DeepSeekBlue.copy(alpha = 0.45f) else cardBorder),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { selectTextMsg = Message(role = "user", content = "${f.name}\n\n${f.content}") }
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("📄 ${f.name} (${f.sizeLabel})", fontSize = 12.sp)
+                                        val chipLabel = if (f.name.startsWith("\uD83D\uDCBB ")) "${f.name} (${f.sizeLabel})" else "📄 ${f.name} (${f.sizeLabel})"
+                                        Text(
+                                            chipLabel,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.widthIn(max = 220.dp)
+                                        )
                                         Spacer(Modifier.width(6.dp))
                                         Text(
                                             "✕",
@@ -1736,7 +1801,7 @@ fun ChatScreen(
                                     .fillMaxWidth()
                                     .clickable {
                                         codePickerBlocks = null
-                                        TermuxBridge.sendCodeToTermux(ctx, b.lang, b.code)
+                                        openTermuxRunner(b.lang, b.code, autoStart = true)
                                     }
                                     .padding(vertical = 10.dp)
                             ) {
@@ -1770,9 +1835,19 @@ fun ChatScreen(
         }
     }
 
-    // Selectable Text Dialog ("Выбрать текст") with native TextView auto-scroll
+    // Selectable Text Dialog ("Выбрать текст") with marker -> Termux action
     selectTextMsg?.let { m ->
         val textColArgb = MaterialTheme.colorScheme.onBackground.toArgb()
+        var tvRef by remember(m.id) { mutableStateOf<TextView?>(null) }
+        fun getSelectedText(): String {
+            val tv = tvRef ?: return ""
+            val a = tv.selectionStart
+            val b = tv.selectionEnd
+            if (a < 0 || b < 0 || a == b) return ""
+            val lo = minOf(a, b).coerceIn(0, tv.text.length)
+            val hi = maxOf(a, b).coerceIn(0, tv.text.length)
+            return tv.text.subSequence(lo, hi).toString().trim()
+        }
         Dialog(
             onDismissRequest = { selectTextMsg = null },
             properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -1784,12 +1859,10 @@ fun ChatScreen(
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "Выбрать текст",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.weight(1f)
-                        )
+                        Column(Modifier.weight(1f)) {
+                            Text("Выбрать текст", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Выдели маркером фрагмент для Termux", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         Text(
                             "✕",
                             fontSize = 18.sp,
@@ -1806,7 +1879,28 @@ fun ChatScreen(
                                     setTextIsSelectable(true)
                                     setLineSpacing(0f, 1.35f)
                                     setPadding(6, 6, 6, 32)
+                                    customSelectionActionModeCallback = object : ActionMode.Callback {
+                                        override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {
+                                            menu?.add(0, 99123, 0, "▶ В Termux")
+                                            return true
+                                        }
+                                        override fun onPrepareActionMode(mode: ActionMode?, menu: Menu?) = false
+                                        override fun onActionItemClicked(mode: ActionMode?, item: MenuItem?): Boolean {
+                                            if (item?.itemId == 99123) {
+                                                val sel = getSelectedText()
+                                                mode?.finish()
+                                                if (sel.isNotBlank()) {
+                                                    selectTextMsg = null
+                                                    openTermuxRunner("", sel, autoStart = false)
+                                                }
+                                                return true
+                                            }
+                                            return false
+                                        }
+                                        override fun onDestroyActionMode(mode: ActionMode?) {}
+                                    }
                                 }
+                                tvRef = tv
                                 addView(
                                     tv,
                                     ViewGroup.LayoutParams(
@@ -1818,20 +1912,180 @@ fun ChatScreen(
                         },
                         update = { sv ->
                             val tv = sv.getChildAt(0) as TextView
+                            tvRef = tv
                             if (tv.text.toString() != m.content) tv.text = m.content
                             tv.setTextColor(textColArgb)
                             tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, settings.fontSizeSp.toFloat())
                         }
                     )
                     Spacer(Modifier.height(12.dp))
-                    Button(
-                        onClick = {
-                            copyPlain(ctx, m.content, "Скопировано полностью")
-                            selectTextMsg = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = {
+                                copyPlain(ctx, m.content, "Скопировано полностью")
+                                selectTextMsg = null
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) { Text("Копировать всё") }
+                        Button(
+                            onClick = {
+                                val sel = getSelectedText()
+                                if (sel.isBlank()) {
+                                    Toast.makeText(ctx, "Выделите фрагмент маркером", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    selectTextMsg = null
+                                    openTermuxRunner("", sel, autoStart = false)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) { Text("▶ В Termux") }
+                    }
+                }
+            }
+        }
+    }
+
+    // Unified Termux Script Runner Dialog
+    termuxRunner?.let { tr ->
+        val hasPerm = TermuxBridge.hasRunPermission(ctx)
+        Dialog(
+            onDismissRequest = { if (!tr.running) termuxRunner = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (isDark) Color(0xFF1F2229) else Color.White,
+                modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.86f)
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (tr.running) "⏳ Termux (${tr.elapsedSec}с)" else "▶ Termux",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("bash", "python3").forEach { interp ->
+                                ModePill(
+                                    label = if (interp == "python3") "python" else "bash",
+                                    active = tr.interpreter == interp,
+                                    isDark = isDark,
+                                    onClick = {
+                                        if (!tr.running) termuxRunner = tr.copy(interpreter = interp)
+                                    }
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "✕",
+                            fontSize = 18.sp,
+                            modifier = Modifier.clickable {
+                                if (tr.running) tr.jobHandle?.requestCancel(ctx)
+                                termuxRunner = null
+                            }.padding(4.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = tr.script,
+                        onValueChange = { if (!tr.running) termuxRunner = tr.copy(script = it) },
+                        readOnly = tr.running,
+                        textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 17.sp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 90.dp, max = if (tr.running || tr.exitCode != null) 140.dp else 280.dp),
                         shape = RoundedCornerShape(12.dp)
-                    ) { Text("Копировать всё") }
+                    )
+                    if (!hasPerm) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "⚠️ Нет разрешения RUN_COMMAND (Настройки → Termux → Прямой запуск команд).",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    if (tr.statusLine.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(tr.statusLine, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = DeepSeekBlue)
+                    }
+                    if (tr.running || tr.exitCode != null) {
+                        Spacer(Modifier.height(6.dp))
+                        val consoleText = if (tr.running) tr.liveTail.ifBlank { "Выполняется…" } else tr.resultBody
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isDark) Color(0xFF13151A) else Color(0xFFF3F5F8),
+                            modifier = Modifier.weight(1f).fillMaxWidth()
+                        ) {
+                            Text(
+                                text = consoleText,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.5.sp,
+                                lineHeight = 16.sp,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(10.dp)
+                            )
+                        }
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    if (tr.running) {
+                        Button(
+                            onClick = { tr.jobHandle?.requestCancel(ctx) },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        ) { Text("⏹ Остановить") }
+                    } else if (tr.exitCode != null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = { copyPlain(ctx, tr.resultBody, "Вывод скопирован") },
+                                shape = RoundedCornerShape(12.dp)
+                            ) { Text("❐") }
+                            OutlinedButton(
+                                onClick = { startTermuxRunner(tr) },
+                                shape = RoundedCornerShape(12.dp)
+                            ) { Text("↻") }
+                            Button(
+                                onClick = {
+                                    val icon = if (tr.exitCode == 0) "\u2705" else "\u26A0\uFE0F"
+                                    val tag = if (tr.interpreter == "python3") "python" else "bash"
+                                    val txt = tr.resultBody.trim().ifBlank { "(пусто)" }
+                                    val sizeLbl = if (txt.length >= 1024) "${txt.length / 1024} КБ" else "${txt.length} симв."
+                                    attachments.add(
+                                        AttachedFile(
+                                            name = "\uD83D\uDCBB $tag $icon exit=${tr.exitCode} \u00B7 ${tr.durationSec}с",
+                                            sizeLabel = sizeLbl,
+                                            content = txt
+                                        )
+                                    )
+                                    termuxRunner = null
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp)
+                            ) { Text("📎 В чат") }
+                        }
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = {
+                                    TermuxBridge.sendCodeToTermux(ctx, tr.interpreter, tr.script)
+                                    termuxRunner = null
+                                },
+                                shape = RoundedCornerShape(12.dp)
+                            ) { Text("📤 Файлом") }
+                            Button(
+                                onClick = { startTermuxRunner(tr) },
+                                enabled = hasPerm,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp)
+                            ) { Text("▶ Запустить") }
+                        }
+                    }
                 }
             }
         }
