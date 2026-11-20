@@ -1740,60 +1740,15 @@ fun ChatScreen(
 
     // Specific Code Block Picker Dialog (when message has 2+ blocks)
     codePickerBlocks?.let { blocks ->
-        val dividerCol = if (isDark) Color(0xFF2B2F38) else Color(0xFFF0F1F4)
-        Dialog(onDismissRequest = { codePickerBlocks = null }) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (isDark) Color(0xFF1F2229) else Color.White,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        "Выберите блок для Termux",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                        blocks.forEachIndexed { idx, b ->
-                            val firstLine = b.code.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        codePickerBlocks = null
-                                        openTermuxRunner(b.lang, b.code, autoStart = true)
-                                    }
-                                    .padding(vertical = 10.dp)
-                            ) {
-                                Text(
-                                    "Блок #${idx + 1} · ${b.lang.ifBlank { "code" }} (${b.code.lines().size} стр.)",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = DeepSeekBlue
-                                )
-                                if (firstLine.isNotBlank()) {
-                                    Text(
-                                        firstLine,
-                                        fontSize = 12.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                            if (idx < blocks.lastIndex) HorizontalDivider(color = dividerCol)
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(
-                        onClick = { codePickerBlocks = null },
-                        modifier = Modifier.align(Alignment.End)
-                    ) { Text("Отмена") }
-                }
+        CodeBlockPickerDialog(
+            blocks = blocks,
+            isDark = isDark,
+            onDismiss = { codePickerBlocks = null },
+            onPick = { b ->
+                codePickerBlocks = null
+                openTermuxRunner(b.lang, b.code, autoStart = true)
             }
-        }
+        )
     }
 
     // Selectable Text Dialog ("Выбрать текст") with marker -> Termux action
