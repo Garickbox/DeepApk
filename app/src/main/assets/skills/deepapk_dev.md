@@ -17,7 +17,7 @@
   - `TermuxBridge.kt` — запуск скриптов в Termux (`RUN_COMMAND`), `isRunnableCodeBlock`, `detectInterpreter`, `readLogSmart` (начало + хвост лога), `TermuxJobHandle` + отмена по `.pid`, `cleanupOldJobs`.
   - `MarkdownRenderer.kt` — парсер Markdown/кода/таблиц/`doc_report`; кнопка `▶ Termux` ставится только на исполняемые блоки (`TermuxBridge.isRunnableCodeBlock`), кнопки Открыть, Посмотреть, Скачать `.docx`.
   - `SkillPackage.kt` — формат `deepapk-skill-v1` (`.deepapk`), импорт из VIEW/SEND/диалога и экспорт через `FileProvider`.
-  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 13** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
+  - `PresetStore.kt` + `assets/skills/*.md` — встроенные заготовки (`default`, `termux`, `docx_report`, `deepapk_dev`); `CURRENT_VER` **сейчас 14** обновляет системные скиллы при сохранении `learnedSkill` и пользовательских пресетов.
   - `DocxEngine.kt` — генератор ГОСТ `.docx` из блока `doc_report` (OOXML ZIP, autofit-таблицы, svg в PNG, PAGE в колонтитуле, автосохранение HTML).
   - `SettingsScreen.kt`, `SettingsDialogs.kt`, `SettingsStore.kt` — экран настроек, диалоги пресетов/скиллов/бэкапа и хранилище настроек.
   - `DeepSeekApi.kt`, `ModelCatalog.kt`, `ChatStore.kt`, `AttachmentHelper.kt`, `OcrCache.kt`, `UpdateChecker.kt`.
@@ -47,10 +47,10 @@
   `deep_go.sh` сам снимает бэкап, применяет патч, гоняет `deepapk_guard.py`, при сбое откатывает правки + удаляет созданные новые файлы, коммитит только `app/src app/build.gradle.kts .github`, пушит в main и ждёт CI строго по `HEAD` SHA.
 - **Локальная сборка на телефоне (по запросу):** `bash ~/deep_build.sh` или `DEEP_LOCAL_BUILD=1 bash ~/deep_go.sh "msg"`. По умолчанию сборка идёт в GitHub CI (быстрее и не садит телефон). **Никогда не запускай `./gradlew` напрямую** — упадёт на aapt2.
 - **Ожидание CI + скачивание APK:** `bash ~/deep_watch.sh` (wget для обхода РКН; качает в `~/deep_apks/DeepApk-build-$RNUM.apk`, при падении вызывает `timeout 60 bash ~/deep_err.sh`).
-- **Установка на телефон:** `bash ~/deep_install.sh` (через Shizuku `rish` или локальный ADB `~/deep_adb.sh 5555`).
-- **Перезапуск упавших jobs / скачивание полного лога CI:**
-  `curl -X POST -H "Authorization: Bearer $TOK" "https://api.github.com/repos/Garickbox/DeepApk/actions/runs/$RUN/rerun-failed-jobs"`
-  `curl -sL --max-time 60 -H "Authorization: Bearer $TOK" "https://api.github.com/repos/Garickbox/DeepApk/actions/jobs/$JID/logs" -o ~/deep_tmp/ci.log`
+- **Установка на телефон и Shizuku:** `bash ~/deep_install.sh` (через Shizuku `$PREFIX/bin/rish` -> `pm install`, без ПК и даже без ADB) или `bash ~/deep_adb.sh 5555`. При вызове `rish -c "..."` в скриптах всегда закрывай ввод `</dev/null` (если не передаёшь поток через pipe), иначе `app_process` зависнет на `stdin`. Для `shizuku-termux` держи `shizuku autostart off` (`adb mdns` в Termux не поддерживается).
+- **Перезапуск упавших jobs / скачивание полного лога CI (в РФ надёжнее `wget --timeout`):**
+  `wget -qO- --timeout=20 --method=POST --header="Authorization: Bearer $TOK" "https://api.github.com/repos/Garickbox/DeepApk/actions/runs/$RUN/rerun-failed-jobs"`
+  `wget -q --timeout=60 --header="Authorization: Bearer $TOK" "https://api.github.com/repos/Garickbox/DeepApk/actions/jobs/$JID/logs" -O ~/deep_tmp/ci.log`
 - **Правила патчей в чат:**
   1. Сначала точечное чтение файла (не угадывай строки!).
   2. Не пиши вручную `bak_$$` / `trap rollback` / `git add` — используй `~/deep_tmp/p.py` + `bash ~/deep_go.sh ~/deep_tmp/p.py "msg"`.
@@ -64,7 +64,7 @@
 ## 4. ЧАСТЫЕ ГРАБЛИ ПРОЕКТА (НЕ ПОВТОРЯТЬ)
 - В Kotlin-строках нельзя 8-значный юникод-эскейп (нужны суррогаты UTF-16 или живые UTF-8 эмодзи), не ставь лишний слэш перед uXXXX в UI-строках.
 - В DocxEngine.kt выравнивание абзаца строго `left` (не `both`).
-- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **13**) в унисон с картой и разделом 4.
+- Не вызывать PresetStore.defaults() без ctx; при обновлении встроенных .md скиллов поднимай `CURRENT_VER` в PresetStore.kt (сейчас **14**) в унисон с картой и разделом 4.
 - В AndroidManifest.xml фильтр pathSuffix требует `android:host="*"`.
 - В Compose у `BasicTextField` пиши `decorationBox = { inner ->` без явного типа `() -> Unit` (иначе runtime `ClassCastException: ComposableLambdaImpl`).
 - Не ломай imePadding / navigationBarsPadding, не используй continue внутри inline-лямбд (forEach), используй формат `[Файл: ...]` для сворачивания в чипс.
@@ -74,7 +74,7 @@
 - **`if bash X | tail -N; then`** — `$?` от tail, а не от bash. Использовать `set -o pipefail`, `${PIPESTATUS[0]}` или `bash X > $LOG 2>&1; RC=$?`.
 - **deep_err.sh / deep_watch.sh / любой wget** без --timeout **виснут** при плохой сети. Оборачивать: `timeout 60 bash ~/deep_err.sh`.
 - **CI может падать ДО компиляции** на `Could not resolve org.jetbrains.kotlin:kotlin-gradle-plugin` при пустом Gradle-кэше (`Gradle User Home cache not found`) — транзиентный сбой runner, не наш код. Лечится rerun-failed-jobs или пустым коммитом через deep_go.sh.
-- **CI лог:** качать `curl -sL --max-time 60 -H "Authorization: Bearer $TOK" "$API/actions/jobs/$JID/logs" → файл`. В логе строки **префиксованы таймстампом** — `grep '^e:'` ничего не найдёт, ищи `' e: '` (с пробелами) или `Unresolved reference|Type mismatch|Cannot access`.
+- **CI лог и API:** `curl` к `api.github.com` часто молчит без прокси — используй `wget -qO- --timeout=20 --header="Authorization: Bearer $TOK" ...`. В логе строки **префиксованы таймстампом** — `grep '^e:'` ничего не найдёт, ищи `' e: '` (с пробелами) или `Unresolved reference|Type mismatch|Cannot access`.
 - **gh CLI** требует read:org — токен из ~/.gh_token может не подойти для `gh auth login`, но **для прямого API хватает** (`curl -H "Authorization: Bearer $TOK"`).
 - **fs_write на большом файле через один тег** может обрываться или испортить файл — использовать fs_patch для точечных правок, а полную перезапись делать через bash-скрипт (git checkout + Python heredoc), не через тег.
 
