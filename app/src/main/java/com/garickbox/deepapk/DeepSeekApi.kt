@@ -97,7 +97,7 @@ object DeepSeekApi {
         history.forEach { arr.put(JSONObject().put("role", it.role).put("content", it.content)) }
         val root = JSONObject().put("model", modelName.ifBlank { "deepseek/deepseek-v4.1-flash-1017" }).put("messages", arr).put("stream", true)
             .put("max_tokens", settings.maxTokens).put("stream_options", JSONObject().put("include_usage", true))
-            .let{if(!isDirect&&modelName.contains("gemini",true))it.put("reasoning_effort",if(settings.thinkingEnabled)"high"else"low")else it.put("thinking",JSONObject().put("type",if(settings.thinkingEnabled)"enabled"else"disabled"))}
+            .let{if(!isDirect&&modelName.contains("gemini",true))it.put("reasoning_effort",if(settings.thinkingEnabled)"high" else "low")else it.put("thinking",JSONObject().put("type",if(settings.thinkingEnabled)"enabled" else "disabled"))}
         if (!settings.thinkingEnabled) root.put("temperature", settings.temperature.toDouble())
         if (isDirect && settings.webSearchEnabled) root.put("tools", JSONArray().put(JSONObject().put("type", "deepseek_web_search")).put(JSONObject().put("type", "deepseek_read_url")))
         val req = Request.Builder().url(endpointUrl).header("Authorization", "Bearer $key").header("Content-Type", "application/json").post(root.toString().toRequestBody("application/json".toMediaType())).build()
