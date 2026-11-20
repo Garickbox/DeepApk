@@ -247,7 +247,7 @@ object TermuxBridge {
             val logFile = File(jobsDir, "$jobId.log")
             val exitFile = File(jobsDir, "$jobId.exit")
 
-            val wrapper = "({$cmd}) > ${logFile.absolutePath} 2>&1; echo \$? > ${exitFile.absolutePath}"
+            val wrapper = "( $cmd ) > ${logFile.absolutePath} 2>&1; echo \$? > ${exitFile.absolutePath}"
             val bin = "/data/data/com.termux/files/usr/bin/bash"
             try {
                 val intent = Intent("com.termux.RUN_COMMAND").apply {
