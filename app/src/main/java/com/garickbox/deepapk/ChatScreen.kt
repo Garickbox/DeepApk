@@ -1650,59 +1650,20 @@ fun ChatScreen(
         val anchors = messages.mapIndexedNotNull { idx, msg ->
             if (msg.role == "user") idx to msg else null
         }
-        val dividerCol = if (isDark) Color(0xFF2B2F38) else Color(0xFFF0F1F4)
-        Dialog(onDismissRequest = { showAnchorsDialog = false }) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (isDark) Color(0xFF1F2229) else Color.White,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Якоря сообщений (${anchors.size})", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(10.dp))
-                    Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
-                        anchors.forEachIndexed { num, (msgIdx, msg) ->
-                            val preview = msg.content.trim().replace("\n", " ").take(90)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        showAnchorsDialog = false
-                                        focusSectorAround(msgIdx)
-                                        scope.launch {
-                                            kotlinx.coroutines.yield()
-                                            kotlinx.coroutines.delay(50)
-                                            feedPosForMsg(msgIdx)?.let { listState.animateScrollToItem(it) }
-                                        }
-                                    }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.Top
-                            ) {
-                                Text(
-                                    "#${num + 1}",
-                                    fontSize = 12.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = DeepSeekBlue,
-                                    modifier = Modifier.width(34.dp)
-                                )
-                                Text(
-                                    preview,
-                                    fontSize = 13.5.sp,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            if (num < anchors.lastIndex) HorizontalDivider(color = dividerCol)
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(onClick = { showAnchorsDialog = false }, modifier = Modifier.align(Alignment.End)) {
-                        Text("Закрыть")
-                    }
+        AnchorsDialog(
+            anchors = anchors,
+            isDark = isDark,
+            onDismiss = { showAnchorsDialog = false },
+            onSelect = { msgIdx ->
+                showAnchorsDialog = false
+                focusSectorAround(msgIdx)
+                scope.launch {
+                    kotlinx.coroutines.yield()
+                    kotlinx.coroutines.delay(50)
+                    feedPosForMsg(msgIdx)?.let { listState.animateScrollToItem(it) }
                 }
             }
-        }
+        )
     }
 
     // Long-press Context Menu Dialog
