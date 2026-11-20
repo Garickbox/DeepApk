@@ -970,6 +970,9 @@ fun ChatScreen(
                                         if ((msg.content.isNotBlank() || msg.reasoning.isNotBlank()) && !(streaming && i == messages.size - 1)) {
                                             add(ChatFeedItem.AssistantFooter(i, msg))
                                         }
+                                        termuxCmds.forEachIndexed { tIdx, tc ->
+                                            add(ChatFeedItem.TermuxRun(i, msg, tc.cmd, tIdx))
+                                        }
                                     }
                                 }
                             }
