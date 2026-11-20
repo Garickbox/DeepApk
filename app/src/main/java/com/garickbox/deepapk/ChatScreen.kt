@@ -1471,6 +1471,7 @@ fun ChatScreen(
                                 SettingsStore.save(ctx, updated)
                             }
                         )
+                        if (settings.provider == "deepseek") {
                         Spacer(Modifier.width(8.dp))
                         ModePill(
                             label = "🌐 Поиск",
@@ -1482,6 +1483,7 @@ fun ChatScreen(
                                 SettingsStore.save(ctx, updated)
                             }
                         )
+                        }
                         Spacer(Modifier.weight(1f))
 
                         Box {
