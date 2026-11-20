@@ -1259,7 +1259,37 @@ fun ChatScreen(
                                                 isDark = isDark,
                                                 fontSizeSp = settings.fontSizeSp,
                                                 onCopyCode = { _, code -> copyPlain(ctx, code, "Код скопирован") },
-                                                onCopyTermux = { lang, code -> TermuxBridge.sendCodeToTermux(ctx, lang, code) },
+                                                onCopyTermux = { lang, code ->
+                                                    val lower = lang.lowercase().trim()
+                                                    val isShell = lower in listOf("", "sh", "bash", "zsh", "shell")
+                                                    val isPython = lower in listOf("py", "python", "python3")
+                                                    if ((isShell || isPython) && TermuxBridge.hasRunPermission(ctx)) {
+                                                        val cmd = if (isPython) "python3 -c " + TermuxBridge.escapeSingle(code)
+                                                                  else "bash -c " + TermuxBridge.escapeSingle(code)
+                                                        scope.launch {
+                                                            safStatus = if (isPython) "\u23F3 Termux: python\u2026" else "\u23F3 Termux: bash\u2026"
+                                                            TermuxBridge.runAndWatch(
+                                                                ctx = ctx, cmd = cmd,
+                                                                onTick = { elapsed, tail ->
+                                                                    safStatus = "\u23F3 Termux ${elapsed}\u0441 \u00B7 " + tail.take(60)
+                                                                },
+                                                                onDone = { exitCode, body, dur ->
+                                                                    safStatus = ""
+                                                                    val icon = if (exitCode == 0) "\u2705" else "\u26A0\uFE0F"
+                                                                    val tag = if (isPython) "python" else "bash"
+                                                                    val txt = body.trim().ifBlank { "(пусто)" }
+                                                                    val fence = "```"
+                                                                    val userMsg = "[Termux $tag $icon exit=$exitCode \u00B7 ${dur}\u0441]\n$fence\n$txt\n$fence"
+                                                                    messages.add(Message(role = "user", content = userMsg))
+                                                                    persistCurrentSession()
+                                                                    startStream(scrollAnchorIdx = messages.size - 1)
+                                                                }
+                                                            )
+                                                        }
+                                                    } else {
+                                                        TermuxBridge.sendCodeToTermux(ctx, lang, code)
+                                                    }
+                                                },
                                                 onCopyTable = { txt, toast -> copyPlain(ctx, txt, toast) },
                                                 onOpenHtml = { raw ->
                                                     val page = if (raw.contains("<html", true) || raw.contains("<!doctype", true)) raw

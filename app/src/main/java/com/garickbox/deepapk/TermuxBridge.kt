@@ -304,6 +304,10 @@ object TermuxBridge {
         }
     }
 
+
+    /** Обернуть строку в одиночные кавычки bash: 'abc', с экранированием встроенных ' */
+    fun escapeSingle(s: String): String = "'" + s.replace("'", "'\\''") + "'"
+
     fun copyToClipboard(ctx: Context, text: String) {
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("deepapk", text))
