@@ -7,24 +7,24 @@ import org.junit.Test
 
 class PresetStoreTest {
 
-    @Test fun learned_empty() { assertEquals("", sanitizeLearned("")); assertEquals("", sanitizeLearned("   \n  ")) }
+    @Test fun learned_empty() { assertEquals("", PresetStore.sanitizeLearned("")); assertEquals("", PresetStore.sanitizeLearned("   \n  ")) }
     @Test fun learned_short() {
-        assertEquals("", sanitizeLearned("короткая"))
-        assertEquals("", sanitizeLearned("12345678901234"))
-        assertEquals("• 123456789012345", sanitizeLearned("123456789012345"))
+        assertEquals("", PresetStore.sanitizeLearned("короткая"))
+        assertEquals("", PresetStore.sanitizeLearned("12345678901234"))
+        assertEquals("• 123456789012345", PresetStore.sanitizeLearned("123456789012345"))
     }
-    @Test fun learned_headers() { assertEquals("", sanitizeLearned("# Заголовок")); assertEquals("", sanitizeLearned("## Второй")) }
-    @Test fun learned_broken() { assertEquals("", sanitizeLearned("- ) обрывок длинный тут")) }
-    @Test fun learned_norm() { assertEquals("• это правило длинное тут", sanitizeLearned("это правило длинное тут")) }
-    @Test fun learned_norm_kept() { assertEquals("• уже было", sanitizeLearned("• уже было")) }
+    @Test fun learned_headers() { assertEquals("", PresetStore.sanitizeLearned("# Заголовок")); assertEquals("", PresetStore.sanitizeLearned("## Второй")) }
+    @Test fun learned_broken() { assertEquals("", PresetStore.sanitizeLearned("- ) обрывок длинный тут")) }
+    @Test fun learned_norm() { assertEquals("• это правило длинное тут", PresetStore.sanitizeLearned("это правило длинное тут")) }
+    @Test fun learned_norm_kept() { assertEquals("• уже было", PresetStore.sanitizeLearned("• уже было")) }
     @Test fun learned_dedup() {
-        val r = sanitizeLearned("• правило длинное здесь\n• Правило длинное здесь")
+        val r = PresetStore.sanitizeLearned("• правило длинное здесь\n• Правило длинное здесь")
         assertEquals(1, r.split("\n").size)
     }
-    @Test fun learned_junk_screen() { assertEquals("", sanitizeLearned("правило -ChatScreen.kt- хвост")) }
-    @Test fun learned_junk_ctx() { assertEquals("", sanitizeLearned("правило -ContextActions.kt- хвост")) }
+    @Test fun learned_junk_screen() { assertEquals("", PresetStore.sanitizeLearned("правило -ChatScreen.kt- хвост")) }
+    @Test fun learned_junk_ctx() { assertEquals("", PresetStore.sanitizeLearned("правило -ContextActions.kt- хвост")) }
     @Test fun learned_order() {
-        val r = sanitizeLearned("## мусор\n• Правило один длинное тут\n\n• Правило два длинное тут\n")
+        val r = PresetStore.sanitizeLearned("## мусор\n• Правило один длинное тут\n\n• Правило два длинное тут\n")
         val lines = r.split("\n")
         assertEquals(2, lines.size)
         assertTrue(lines[0].contains("один"))
@@ -33,7 +33,7 @@ class PresetStoreTest {
     @Test fun learned_8000() {
         val line = "• " + "x".repeat(200)
         val input = (1..50).joinToString("\n") { "$line$it" }
-        val r = sanitizeLearned(input)
+        val r = PresetStore.sanitizeLearned(input)
         assertTrue("len=${r.length}", r.length <= 8000)
     }
     @Test fun prompt_default_no_save() {
