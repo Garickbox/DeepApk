@@ -951,8 +951,8 @@ fun ChatScreen(
                                         add(ChatFeedItem.UserBubble(i, msg))
                                     } else {
                                         if (msg.reasoning.isNotBlank()) add(ChatFeedItem.AssistantReasoning(i, msg))
-                                        val stripped = ProjectFs.stripTermuxTags(stripDocReportForMarkdown(msg.content))
-                                        val termuxCmds = ProjectFs.extractTermuxCmds(msg.content)
+                                        val stripped = stripTermuxTags(stripDocReportForMarkdown(msg.content))
+                                        val termuxCmds = extractTermuxCmds(msg.content)
                                         val docRep = extractDocReport(msg.content)
                                         if (msg.content.isBlank() && streaming && i == messages.size - 1) {
                                             add(ChatFeedItem.AssistantPending(i, msg))
