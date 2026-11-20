@@ -1669,73 +1669,52 @@ fun ChatScreen(
     // Long-press Context Menu Dialog
     contextMenuMsg?.let { m ->
         val hasCode = TermuxBridge.hasCodeBlocks(m.content)
-        val dividerCol = if (isDark) Color(0xFF2B2F38) else Color(0xFFF0F1F4)
-
-        Dialog(onDismissRequest = { contextMenuMsg = null }) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (isDark) Color(0xFF1F2229) else Color.White,
-                tonalElevation = 8.dp,
-                shadowElevation = 10.dp,
-                modifier = Modifier.widthIn(min = 240.dp, max = 290.dp)
-            ) {
-                Column(Modifier.padding(vertical = 6.dp)) {
-                    ContextMenuItem("❐", "Копировать") {
-                        copyPlain(ctx, m.content, "Скопировано")
-                        contextMenuMsg = null
-                    }
-                    HorizontalDivider(color = dividerCol)
-                    ContextMenuItem("⬚", "Выбрать текст") {
-                        selectTextMsg = m
-                        contextMenuMsg = null
-                    }
-                    HorizontalDivider(color = dividerCol)
-                    ContextMenuItem("↻", "Повторить") {
-                        val target = m
-                        contextMenuMsg = null
-                        if (!streaming) {
-                            if (target.role == "assistant") {
-                                val pos = messages.indexOfFirst { it.id == target.id }
-                                if (pos >= 0) {
-                                    while (messages.size > pos) {
-                                        messages.removeAt(messages.size - 1)
-                                    }
-                                    startStream()
-                                }
-                            } else {
-                                messages.add(Message(role = "user", content = target.content))
-                                startStream()
-                            }
+        ContextMenuDialog(
+            message = m,
+            isDark = isDark,
+            hasCode = hasCode,
+            onDismiss = { contextMenuMsg = null },
+            onCopy = {
+                copyPlain(ctx, m.content, "Скопировано")
+                contextMenuMsg = null
+            },
+            onSelectText = {
+                selectTextMsg = m
+                contextMenuMsg = null
+            },
+            onRetry = {
+                val target = m
+                contextMenuMsg = null
+                if (!streaming) {
+                    if (target.role == "assistant") {
+                        val pos = messages.indexOfFirst { it.id == target.id }
+                        if (pos >= 0) {
+                            while (messages.size > pos) messages.removeAt(messages.size - 1)
+                            startStream()
                         }
-                    }
-                    if (m.role == "assistant") {
-                        HorizontalDivider(color = dividerCol)
-                        ContextMenuItem("⏭", "Продолжить") {
-                            val target = m
-                            contextMenuMsg = null
-                            val pos = messages.indexOfFirst { it.id == target.id }
-                            if (pos >= 0 && !streaming) {
-                                startStream(continueTargetIdx = pos)
-                            }
-                        }
-                    }
-                    HorizontalDivider(color = dividerCol)
-                    ContextMenuItem("📌", "В правила заготовки") {
-                        val txt = m.content.trim().take(600)
-                        contextMenuMsg = null
-                        addSkillDraft = txt
-                    }
-                    if (hasCode) {
-                        HorizontalDivider(color = dividerCol)
-                        ContextMenuItem("▶", "Передать в Termux", accent = DeepSeekBlue) {
-                            val content = m.content
-                            contextMenuMsg = null
-                            handleSendMessageToTermux(content)
-                        }
+                    } else {
+                        messages.add(Message(role = "user", content = target.content))
+                        startStream()
                     }
                 }
+            },
+            onContinue = {
+                val target = m
+                contextMenuMsg = null
+                val pos = messages.indexOfFirst { it.id == target.id }
+                if (pos >= 0 && !streaming) startStream(continueTargetIdx = pos)
+            },
+            onAddToSkill = {
+                val txt = m.content.trim().take(600)
+                contextMenuMsg = null
+                addSkillDraft = txt
+            },
+            onSendToTermux = {
+                val content = m.content
+                contextMenuMsg = null
+                handleSendMessageToTermux(content)
             }
-        }
+        )
     }
 
     // Specific Code Block Picker Dialog (when message has 2+ blocks)
@@ -1753,114 +1732,23 @@ fun ChatScreen(
 
     // Selectable Text Dialog ("Выбрать текст") with marker -> Termux action
     selectTextMsg?.let { m ->
-        val textColArgb = MaterialTheme.colorScheme.onBackground.toArgb()
-        var tvRef by remember(m.id) { mutableStateOf<TextView?>(null) }
-        fun getSelectedText(): String {
-            val tv = tvRef ?: return ""
-            val a = tv.selectionStart
-            val b = tv.selectionEnd
-            if (a < 0 || b < 0 || a == b) return ""
-            val lo = minOf(a, b).coerceIn(0, tv.text.length)
-            val hi = maxOf(a, b).coerceIn(0, tv.text.length)
-            return tv.text.subSequence(lo, hi).toString().trim()
-        }
-        Dialog(
-            onDismissRequest = { selectTextMsg = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (isDark) Color(0xFF1F2229) else Color.White,
-                modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.84f)
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Выбрать текст", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                            Text("Выдели маркером фрагмент для Termux", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Text(
-                            "✕",
-                            fontSize = 18.sp,
-                            modifier = Modifier.clickable { selectTextMsg = null }.padding(4.dp)
-                        )
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    AndroidView(
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                        factory = { c ->
-                            ScrollView(c).apply {
-                                isFillViewport = true
-                                val tv = TextView(c).apply {
-                                    setTextIsSelectable(true)
-                                    setLineSpacing(0f, 1.35f)
-                                    setPadding(6, 6, 6, 32)
-                                    customSelectionActionModeCallback = object : ActionMode.Callback {
-                                        override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {
-                                            menu?.add(0, 99123, 0, "▶ В Termux")
-                                            return true
-                                        }
-                                        override fun onPrepareActionMode(mode: ActionMode?, menu: Menu?) = false
-                                        override fun onActionItemClicked(mode: ActionMode?, item: MenuItem?): Boolean {
-                                            if (item?.itemId == 99123) {
-                                                val sel = getSelectedText()
-                                                mode?.finish()
-                                                if (sel.isNotBlank()) {
-                                                    selectTextMsg = null
-                                                    openTermuxRunner("", sel, autoStart = false)
-                                                }
-                                                return true
-                                            }
-                                            return false
-                                        }
-                                        override fun onDestroyActionMode(mode: ActionMode?) {}
-                                    }
-                                }
-                                tvRef = tv
-                                addView(
-                                    tv,
-                                    ViewGroup.LayoutParams(
-                                        ViewGroup.LayoutParams.MATCH_PARENT,
-                                        ViewGroup.LayoutParams.WRAP_CONTENT
-                                    )
-                                )
-                            }
-                        },
-                        update = { sv ->
-                            val tv = sv.getChildAt(0) as TextView
-                            tvRef = tv
-                            if (tv.text.toString() != m.content) tv.text = m.content
-                            tv.setTextColor(textColArgb)
-                            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, settings.fontSizeSp.toFloat())
-                        }
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(
-                            onClick = {
-                                copyPlain(ctx, m.content, "Скопировано полностью")
-                                selectTextMsg = null
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp)
-                        ) { Text("Копировать всё") }
-                        Button(
-                            onClick = {
-                                val sel = getSelectedText()
-                                if (sel.isBlank()) {
-                                    Toast.makeText(ctx, "Выделите фрагмент маркером", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    selectTextMsg = null
-                                    openTermuxRunner("", sel, autoStart = false)
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp)
-                        ) { Text("▶ В Termux") }
-                    }
-                }
+        SelectTextDialog(
+            message = m,
+            isDark = isDark,
+            fontSizeSp = settings.fontSizeSp.toFloat(),
+            onDismiss = { selectTextMsg = null },
+            onCopyAll = {
+                copyPlain(ctx, m.content, "Скопировано полностью")
+                selectTextMsg = null
+            },
+            onSendToTermux = { sel ->
+                selectTextMsg = null
+                openTermuxRunner("", sel, autoStart = false)
+            },
+            onEmptySelection = {
+                Toast.makeText(ctx, "Выделите фрагмент маркером", Toast.LENGTH_SHORT).show()
             }
-        }
+        )
     }
 
     // Unified Termux Script Runner Dialog
