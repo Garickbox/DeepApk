@@ -2378,122 +2378,14 @@ fun ChatScreen(
         }
     }
     if (showOcrBaseDialog) {
-        var reloadKey by remember { mutableStateOf(0) }
-        var confirmClear by remember { mutableStateOf(false) }
-        var ocrStats by remember{mutableStateOf(OcrCache.Stats(0,0,0L,false))};var ocrList by remember{mutableStateOf<List<OcrCache.Entry>>(emptyList())}
-        LaunchedEffect(reloadKey,ocrRefreshKey){ocrStats=withContext(Dispatchers.IO){OcrCache.stats(ctx)};ocrList=withContext(Dispatchers.IO){OcrCache.list(ctx)}}
-        AlertDialog(
-            onDismissRequest = { showOcrBaseDialog = false; confirmClear = false },
-            title = { Text("📚 База OCR", fontSize = 17.sp, fontWeight = FontWeight.SemiBold) },
-            text = {
-                Column(
-                    Modifier
-                        .heightIn(max = 420.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(
-                        "Страниц: ${ocrStats.pages} · Файлов: ${ocrStats.files} · ${OcrCache.formatBytes(ocrStats.bytes)}",
-                        fontSize = 12.5.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    if (ocrBusy) {
-                        Text(
-                            "📖 OCR: $ocrCur / ${if (ocrTotal > 0) ocrTotal else "?"}",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        if (ocrTotal > 0) {
-                            LinearProgressIndicator(
-                                progress = { ocrCur.toFloat() / ocrTotal.toFloat() },
-                                modifier = Modifier.fillMaxWidth().height(6.dp)
-                            )
-                        } else {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(6.dp))
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Можно отменить — уже распознанные страницы остаются в базе",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(12.dp))
-                    }
-                    if (ocrList.isEmpty()) {
-                        Text(
-                            "Пока пусто. Распознай PDF — каждая страница сохранится здесь (по содержимому, не по имени). Повторная обработка того же файла пойдёт из базы — секунды вместо минут.",
-                            fontSize = 12.5.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        ocrList.forEach { e ->
-                            Row(
-                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(e.name, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(
-                                        "${e.pages} стр. · ${OcrCache.formatBytes(e.bytes)}",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Text(
-                                    "🗑",
-                                    fontSize = 15.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .clickable {
-                                            scope.launch(Dispatchers.IO){OcrCache.deleteOne(ctx,e.hash);withContext(Dispatchers.Main){reloadKey++}}
-                                        }
-                                        .padding(start = 10.dp, top = 4.dp, bottom = 4.dp)
-                                )
-                            }
-                        }
-                    }
-                    if (confirmClear && ocrList.isNotEmpty()) {
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            "Нажми «Удалить всё» ещё раз для подтверждения",
-                            fontSize = 12.sp,
-                            color = Color(0xFFD32F2F)
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (ocrList.isNotEmpty() && !ocrBusy) {
-                        if (confirmClear) {
-                            Button(
-                                onClick = {
-                                    scope.launch(Dispatchers.IO){OcrCache.clear(ctx);withContext(Dispatchers.Main){confirmClear=false;reloadKey++}}
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
-                            ) { Text("Удалить всё") }
-                            Spacer(Modifier.width(6.dp))
-                        } else {
-                            OutlinedButton(onClick = { confirmClear = true }) { Text("🗑") }
-                            Spacer(Modifier.width(6.dp))
-                        }
-                    }
-                    if (ocrBusy) {
-                        Button(
-                            onClick = { ocrJob?.cancel() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
-                        ) { Text("⏹ Отменить") }
-                    } else {
-                        Button(onClick = { ocrPdfPicker.launch(arrayOf("application/pdf")) }) {
-                            Text("📥 Загрузить PDF")
-                        }
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showOcrBaseDialog = false; confirmClear = false }) { Text("Закрыть") }
-            }
+        OcrBaseDialog(
+            ocrBusy = ocrBusy,
+            ocrCur = ocrCur,
+            ocrTotal = ocrTotal,
+            ocrRefreshKey = ocrRefreshKey,
+            onDismiss = { showOcrBaseDialog = false },
+            onCancelOcr = { ocrJob?.cancel() },
+            onPickPdf = { ocrPdfPicker.launch(arrayOf("application/pdf")) }
         )
     }
 }
