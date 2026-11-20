@@ -420,6 +420,7 @@ object ProjectFs {
             .replace(Regex("""<fs_tree[^>]*?(?:/>|>[\s\S]*?</fs_tree>)""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""<fs_grep[^>]*?(?:/>|>[\s\S]*?</fs_grep>)""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""<fs_read[^>]*?(?:/>|>[\s\S]*?</fs_read>)""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""<termux_run\b[^>]*?(?:/>|>[\s\S]*?</termux_run>)""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""\n{3,}"""), "\n\n")
             .trim()
         // Авто-заметка только в chipLabel payload'а (executeReadOps),
@@ -700,5 +701,27 @@ internal fun isPlaceholderPath(input: String): Boolean {
     // Короткие имена ('a', 'b', 'X') — валидные имена файлов без расширения.
     if (s.all { it == '.' || it == '\u2026' || it == '*' || it == '?' || it == '_' }) return true
     return false
+
+
+// ===== Termux run =====
+data class TermuxCmd(val cmd: String, val rangeStart: Int)
+
+fun extractTermuxCmds(raw: String): List<TermuxCmd> {
+    if (!raw.contains("<termux_run")) return emptyList()
+    val text = normalizeDsml(raw)
+    val out = mutableListOf<TermuxCmd>()
+    Regex("""<termux_run\s+cmd="([^"]{1,500})"\s*(?:/>|>[\s\S]*?</termux_run>)""",
+           RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
+        val c = m.groupValues[1].trim()
+        if (c.isNotBlank()) out.add(TermuxCmd(c, m.range.first))
+    }
+    return out
+}
+
+fun stripTermuxTags(input: String): String =
+    input.replace(Regex("""<termux_run\b[^>]*?(?:/>|>[\s\S]*?</termux_run>)""",
+        RegexOption.IGNORE_CASE), "")
+
+
 }
 
