@@ -1467,31 +1467,18 @@ fun ChatScreen(
                         }
                     }
 
-                    BasicTextField(
+                    ChipTextField(
                         value = input,
                         onValueChange = { input = it },
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 24.dp, max = 130.dp),
+                        placeholder = "Напишите сообщение…",
+                        textColor = MaterialTheme.colorScheme.onBackground,
+                        fontSizeSp = 15f,
+                        lineHeightSp = 21f,
                         maxLines = 6,
-                        textStyle = TextStyle(
-                            color = MaterialTheme.colorScheme.onBackground,
-                            fontSize = 15.sp,
-                            lineHeight = 21.sp
-                        ),
-                        cursorBrush = SolidColor(DeepSeekBlue),
-                        decorationBox = { innerTextField ->
-                            Box(Modifier.fillMaxWidth()) {
-                                if (input.isEmpty()) {
-                                    Text(
-                                        "Напишите сообщение…",
-                                        fontSize = 15.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                innerTextField()
-                            }
-                        }
+                        cursorColor = DeepSeekBlue
                     )
 
                     Spacer(Modifier.height(12.dp))
