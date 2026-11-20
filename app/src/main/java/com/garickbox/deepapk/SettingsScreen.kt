@@ -353,7 +353,7 @@ fun SettingsScreen(
                 }
             },
             confirmButton = {
-                if (testBusy) TextButton(enabled = false) { Text("⏳") }
+                if (testBusy) TextButton(onClick = {}, enabled = false) { Text("⏳") }
                 else Button(onClick = {
                     testBusy = true; testLog = ""; testExit = null; testDur = 0
                     scope.launch {
