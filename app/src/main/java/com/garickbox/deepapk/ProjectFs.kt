@@ -635,7 +635,7 @@ fun extractTermuxCmds(raw: String): List<TermuxCmd> {
     val text = normalizeDsml(raw)
     if (!text.contains("<termux_run", ignoreCase = true)) return emptyList()
     val out = mutableListOf<TermuxCmd>()
-    Regex("""<termux_run([^>]*)(?:/>|>([\s\S]*?)</termux_run>)""", RegexOption.IGNORE_CASE)
+    Regex("""<termux_run([^>]*?)(?:/>|>([\s\S]*?)</termux_run>)""", RegexOption.IGNORE_CASE)
         .findAll(text).forEach { m ->
             val attrs = ProjectFs.parseAttrs(m.groupValues[1])
             val cmdAttr = attrs["cmd"].orEmpty().trim()
