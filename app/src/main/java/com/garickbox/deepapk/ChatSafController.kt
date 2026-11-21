@@ -75,7 +75,7 @@ object ChatSafController {
 
     internal fun isBlockedTermuxCmd(cmd: String): Boolean {
         val c = cmd.lowercase().trim()
-        if (Regex("""(^|[;&|\s])rm\s+-[a-z]*r[a-z]*\s+(/|~|\$home)(\s|$)""").containsMatchIn(c)) return true
+        if (Regex("""(^|[;&|\s])rm\s+-[a-z]*r[a-z]*\s+(/|~|[$]home)(\s|$)""").containsMatchIn(c)) return true
         if (c.contains("mkfs.") || c.contains(":(){ :|:& };:")) return true
         return false
     }

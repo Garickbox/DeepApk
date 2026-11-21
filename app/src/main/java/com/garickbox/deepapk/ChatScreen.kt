@@ -836,194 +836,32 @@ fun ChatScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             Column(Modifier.fillMaxSize()) {
-                // Top bar
-                val barIconColor = MaterialTheme.colorScheme.onBackground
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .clickable { if (!streaming) scope.launch { drawerState.open() } },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Canvas(Modifier.size(18.dp)) {
-                            val stroke = 2.dp.toPx()
-                            drawLine(
-                                color = barIconColor,
-                                start = Offset(0f, size.height * 0.30f),
-                                end = Offset(size.width * 0.95f, size.height * 0.30f),
-                                strokeWidth = stroke,
-                                cap = StrokeCap.Round
-                            )
-                            drawLine(
-                                color = barIconColor,
-                                start = Offset(0f, size.height * 0.72f),
-                                end = Offset(size.width * 0.58f, size.height * 0.72f),
-                                strokeWidth = stroke,
-                                cap = StrokeCap.Round
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.width(6.dp))
-                    val topPreset = presets.firstOrNull { it.id == activePresetId } ?: presets.first()
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = activeTitle,
-                            fontSize = 15.5.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Row(
-                            modifier = Modifier.padding(top = 2.dp).horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        if (topPreset.id != "default") DeepSeekBlue.copy(alpha = if (isDark) 0.22f else 0.11f)
-                                        else MaterialTheme.colorScheme.surface
-                                    )
-                                    .clickable { if (!streaming) showPresetsDialog = true }
-                                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "${topPreset.emoji} ${topPreset.name} ▾",
-                                    fontSize = 11.5.sp,
-                                    fontWeight = if (topPreset.id != "default") FontWeight.SemiBold else FontWeight.Medium,
-                                    color = if (topPreset.id != "default") DeepSeekBlue else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            val safConnected = projectLabel.isNotBlank() && ProjectFs.isReady(ctx)
-                            val safOn = safConnected && projectAutoRead
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        if (safOn) DeepSeekBlue.copy(alpha = if (isDark) 0.22f else 0.11f)
-                                        else MaterialTheme.colorScheme.surface
-                                    )
-                                    .clickable {
-                                        if (!streaming) {
-                                            if (!safConnected) treePicker.launch(null) else showProjectFsDialog = true
-                                        }
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = if (safConnected) "📂 ${projectLabel.take(14)}" + (if (safOn) " · ВКЛ" else " · ВЫКЛ") else "📂 Папка",
-                                    fontSize = 11.5.sp,
-                                    fontWeight = if (safOn) FontWeight.SemiBold else FontWeight.Medium,
-                                    color = if (safOn) DeepSeekBlue else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-
-                    var showProvMenu by remember { mutableStateOf(false) }
-                    Box(Modifier.padding(end = 8.dp)) {
-                        Surface(
-                            shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable { if (!streaming) showProvMenu = true }
-                        ) {
-                            Text(settings.providerShort(), fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = DeepSeekBlue, modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp))
-                        }
-                        DropdownMenu(expanded = showProvMenu, onDismissRequest = { showProvMenu = false }) {
-                            AppSettings.ALL_PROVIDERS.forEach { pid ->
-                                val mark = if (settings.hasKey(pid)) "✓" else "нет ключа"
-                                DropdownMenuItem(
-                                    text = { Text("${settings.providerLabel(pid)} ($mark)", fontSize = 13.sp) },
-                                    onClick = { showProvMenu = false; val u = settings.copy(provider = pid); settings = u; SettingsStore.save(ctx, u) }
-                                )
-                            }
-                            DropdownMenuItem(text = { Text("⚙ Настройки и ключи", fontSize = 13.sp, color = DeepSeekBlue) }, onClick = { showProvMenu = false; onOpenSettings() })
-                        }
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .border(1.5.dp, barIconColor.copy(alpha = 0.75f), CircleShape)
-                            .clickable { createNewSession() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("+", fontSize = 18.sp, fontWeight = FontWeight.Medium, color = barIconColor)
-                    }
-                }
-
-
-                if (safStatus.isNotBlank()) {
-                    Surface(color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
-                        Row(Modifier.padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = DeepSeekBlue)
-                            Spacer(Modifier.width(8.dp))
-                            Text("📂 $safStatus", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                        }
-                    }
-                }
-                if (error.isNotBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 150.dp)
-                    ) {
-                        Row(
-                            Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Text(
-                                "❌ $error",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())
-                            )
-                            Text(
-                                "✕",
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.clickable { error = "" }.padding(4.dp)
-                            )
-                        }
-                    }
-                }
+                val topPreset = presets.firstOrNull { it.id == activePresetId } ?: presets.first()
+                val safConnected = projectLabel.isNotBlank() && ProjectFs.isReady(ctx)
+                ChatTopBar(
+                    activeTitle = activeTitle,
+                    topPreset = topPreset,
+                    safConnected = safConnected,
+                    safOn = safConnected && projectAutoRead,
+                    projectLabel = projectLabel,
+                    settings = settings,
+                    streaming = streaming,
+                    isDark = isDark,
+                    onOpenDrawer = { scope.launch { drawerState.open() } },
+                    onOpenPresets = { showPresetsDialog = true },
+                    onSafClick = { if (!safConnected) treePicker.launch(null) else showProjectFsDialog = true },
+                    onSelectProvider = { pid -> val u = settings.copy(provider = pid); settings = u; SettingsStore.save(ctx, u) },
+                    onOpenSettings = onOpenSettings,
+                    onNewChat = { createNewSession() }
+                )
+                ChatStatusBanners(safStatus = safStatus, error = error, onClearError = { error = "" })
 
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     if (messages.isEmpty()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 24.dp),
-                            verticalArrangement = Arrangement.Center,
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            DeepWhaleLogo(sizeDp = 56, cornerDp = 16)
-                            Spacer(Modifier.height(14.dp))
-                            Text(
-                                "Привет! Я ${settings.providerLabel()}",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                "${settings.activeModelLabel()} · Чем помочь сегодня?",
-                                fontSize = 13.5.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        ChatEmptyWelcome(
+                            providerLabel = settings.providerLabel(),
+                            modelLabel = settings.activeModelLabel()
+                        )
                     } else {
                         val safeStart = sectorStart.coerceIn(0, messages.size)
                         val safeEnd = sectorEnd.coerceIn(safeStart, messages.size)
@@ -1092,137 +930,25 @@ fun ChatScreen(
 
                             items(count = feedItems.size, key = { feedItems[it].key }) { fIdx ->
                                 when (val item = feedItems[fIdx]) {
-                                    is ChatFeedItem.UserBubble -> {
-                                        val (attFiles, cleanUserText) = remember(item.msg.id, item.msg.content) {
-                                            splitUserAttachments(item.msg.content)
-                                        }
-                                        var userExpanded by remember(item.msg.id) { mutableStateOf(false) }
-                                        val isLongUser = cleanUserText.length > 700 || cleanUserText.count { it == '\n' } > 12
-                                        val shownUserText = remember(cleanUserText, isLongUser, userExpanded) {
-                                            if (!isLongUser || userExpanded) cleanUserText
-                                            else cleanUserText.lineSequence().take(10).joinToString("\n").take(600) + "…"
-                                        }
-                                        Column(
-                                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                                            horizontalAlignment = Alignment.End
-                                        ) {
-                                            if (attFiles.isNotEmpty()) {
-                                                Column(
-                                                    horizontalAlignment = Alignment.End,
-                                                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                                                    modifier = Modifier.padding(bottom = if (shownUserText.isNotBlank()) 6.dp else 0.dp)
-                                                ) {
-                                                    attFiles.forEach { (fName, fBody) ->
-                                                        val kb = (fBody.length / 1024).let { if (it > 0) "${it} КБ" else "${fBody.length} симв." }
-                                                        Surface(
-                                                            shape = RoundedCornerShape(12.dp),
-                                                            color = MaterialTheme.colorScheme.surface,
-                                                            border = BorderStroke(1.dp, DeepSeekBlue.copy(alpha = 0.35f)),
-                                                            modifier = Modifier
-                                                                .widthIn(max = 290.dp)
-                                                                .clip(RoundedCornerShape(12.dp))
-                                                                .combinedClickable(
-                                                                    onClick = { selectTextMsg = Message(role = "user", content = "$fName\n\n$fBody") },
-                                                                    onLongClick = { contextMenuMsg = item.msg }
-                                                                )
-                                                        ) {
-                                                            Row(
-                                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                                                                verticalAlignment = Alignment.CenterVertically
-                                                            ) {
-                                                                Text("📎", fontSize = 13.sp)
-                                                                Spacer(Modifier.width(6.dp))
-                                                                Text(
-                                                                    text = fName,
-                                                                    fontSize = 12.5.sp,
-                                                                    fontWeight = FontWeight.Medium,
-                                                                    maxLines = 1,
-                                                                    overflow = TextOverflow.Ellipsis,
-                                                                    modifier = Modifier.weight(1f, fill = false)
-                                                                )
-                                                                Spacer(Modifier.width(6.dp))
-                                                                Text(
-                                                                    text = kb,
-                                                                    fontSize = 11.5.sp,
-                                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                                )
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            if (shownUserText.isNotBlank()) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(18.dp),
-                                                    color = MaterialTheme.colorScheme.primaryContainer,
-                                                    modifier = Modifier
-                                                        .widthIn(max = 310.dp)
-                                                        .clip(RoundedCornerShape(18.dp))
-                                                        .combinedClickable(onClick = {}, onLongClick = { contextMenuMsg = item.msg })
-                                                ) {
-                                                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                                                        Text(
-                                                            text = shownUserText,
-                                                            fontSize = settings.fontSizeSp.sp,
-                                                            lineHeight = (settings.fontSizeSp + 6).sp,
-                                                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                                                        )
-                                                        if (isLongUser) {
-                                                            Spacer(Modifier.height(4.dp))
-                                                            Text(
-                                                                text = if (userExpanded) "▲ Свернуть" else "▼ Показать весь текст (${cleanUserText.length} симв.)",
-                                                                fontSize = 11.5.sp,
-                                                                fontWeight = FontWeight.Medium,
-                                                                color = DeepSeekBlue,
-                                                                modifier = Modifier.clickable { userExpanded = !userExpanded }
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                    is ChatFeedItem.UserBubble -> UserBubbleCard(
+                                        msg = item.msg,
+                                        fontSizeSp = settings.fontSizeSp,
+                                        onInspectAttachment = { fName, fBody ->
+                                            selectTextMsg = Message(role = "user", content = "$fName\n\n$fBody")
+                                        },
+                                        onLongClick = { contextMenuMsg = item.msg }
+                                    )
                                     is ChatFeedItem.AssistantReasoning -> {
                                         val m = item.msg
-                                        val thoughtBarColor = if (isDark) Color(0xFF3E4554) else Color(0xFFD0D5DD)
-                                        val thoughtBg = if (isDark) Color(0xFF181A1F) else Color(0xFFF6F7F9)
                                         val expanded = m.id in reasoningExpanded
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(thoughtBg)
-                                                .padding(horizontal = 10.dp, vertical = 8.dp)
-                                        ) {
-                                            Text(
-                                                text = (if (expanded) "▼ " else "▶ ") + "Рассуждение (${m.reasoning.length} симв.)",
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Medium,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.fillMaxWidth().clickable {
-                                                    reasoningExpanded = if (expanded) reasoningExpanded - m.id else reasoningExpanded + m.id
-                                                }
-                                            )
-                                            if (expanded) {
-                                                Spacer(Modifier.height(6.dp))
-                                                Box(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .drawBehind {
-                                                            drawLine(thoughtBarColor, Offset(0f, 0f), Offset(0f, size.height), 2.dp.toPx())
-                                                        }
-                                                        .padding(start = 10.dp)
-                                                ) {
-                                                    Text(
-                                                        text = m.reasoning,
-                                                        fontSize = 12.sp,
-                                                        lineHeight = 17.sp,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                        fontFamily = FontFamily.Monospace
-                                                    )
-                                                }
+                                        AssistantReasoningCard(
+                                            msg = m,
+                                            expanded = expanded,
+                                            isDark = isDark,
+                                            onToggle = {
+                                                reasoningExpanded = if (expanded) reasoningExpanded - m.id else reasoningExpanded + m.id
                                             }
-                                        }
+                                        )
                                     }
                                     is ChatFeedItem.AssistantPending -> {
                                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
@@ -1258,130 +984,19 @@ fun ChatScreen(
                                     is ChatFeedItem.AssistantFooter -> {
                                         val m = item.msg
                                         val idx = item.msgIdx
-                                        val docRep = remember(m.content) { extractDocReport(m.content) }
-                                        val htmlWork = remember(m.content, docRep) {
-                                            if (docRep == null) DocxEngine.extractStandaloneHtmlPage(m.content) else null
-                                        }
-                                        var buildingDocx by remember(m.id) { mutableStateOf(false) }
-                                        if (docRep != null && docRep.isComplete) {
-                                            Surface(
-                                                shape = RoundedCornerShape(14.dp),
-                                                color = MaterialTheme.colorScheme.surface,
-                                                border = BorderStroke(1.dp, DeepSeekBlue.copy(alpha = 0.35f)),
-                                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                                            ) {
-                                                Column(Modifier.padding(12.dp)) {
-                                                    Text("📄 ${docRep.title}.docx", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
-                                                    Text(
-                                                        "ГОСТ А4 · Таблиц: ${docRep.tablesCount} · Рисунков: ${docRep.svgCount}",
-                                                        fontSize = 12.sp,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                    Spacer(Modifier.height(10.dp))
-                                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                        OutlinedButton(
-                                                            onClick = { DocxEngine.openHtmlInBrowser(ctx, docRep.title, DocxEngine.buildPreviewHtml(docRep)) },
-                                                            shape = RoundedCornerShape(10.dp),
-                                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                                                            modifier = Modifier.weight(1f)
-                                                        ) { Text("🌐 Посмотреть", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                                                        Button(
-                                                            enabled = !buildingDocx,
-                                                            onClick = {
-                                                                buildingDocx = true
-                                                                scope.launch {
-                                                                    val bytes = withContext(Dispatchers.Default) { DocxEngine.buildDocxBytes(ctx, docRep) }
-                                                                    val mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                                                                    val uri = DocxEngine.saveExportAndNotify(ctx, "${docRep.title}.docx", mime, bytes)
-                                                                    buildingDocx = false
-                                                                    if (uri != null) DocxEngine.openUri(ctx, uri, mime)
-                                                                }
-                                                            },
-                                                            shape = RoundedCornerShape(10.dp),
-                                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                                                            modifier = Modifier.weight(1f)
-                                                        ) { Text(if (buildingDocx) "⏳ Сборка…" else "📥 Скачать .docx", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                                                    }
-                                                }
-                                            }
-                                        } else if (htmlWork != null) {
-                                            Surface(
-                                                shape = RoundedCornerShape(14.dp),
-                                                color = MaterialTheme.colorScheme.surface,
-                                                border = BorderStroke(1.dp, DeepSeekBlue.copy(alpha = 0.35f)),
-                                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                                            ) {
-                                                Column(Modifier.padding(12.dp)) {
-                                                    Text("🌐 Готовая работа: ${htmlWork.first}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                                                    Text("HTML-файл сохранён — откройте в браузере", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                    Spacer(Modifier.height(8.dp))
-                                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                        Button(
-                                                            onClick = { DocxEngine.openHtmlInBrowser(ctx, htmlWork.first, htmlWork.second) },
-                                                            shape = RoundedCornerShape(10.dp),
-                                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                                                            modifier = Modifier.weight(1f)
-                                                        ) { Text("🌐 Посмотреть работу", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                                                        OutlinedButton(
-                                                            onClick = {
-                                                                scope.launch {
-                                                                    DocxEngine.saveExportAndNotify(ctx, "${htmlWork.first}.html", "text/html", htmlWork.second.toByteArray(Charsets.UTF_8))
-                                                                }
-                                                            },
-                                                            shape = RoundedCornerShape(10.dp),
-                                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                                                        ) { Text("📥 HTML", fontSize = 12.sp) }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(14.dp),
-                                            modifier = Modifier.padding(bottom = 6.dp)
-                                        ) {
-                                            Text(
-                                                "❐",
-                                                fontSize = 15.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.clickable { copyPlain(ctx, m.content, "Ответ скопирован") }.padding(vertical = 2.dp)
-                                            )
-                                            if (idx == messages.size - 1 && !streaming) {
-                                                Text(
-                                                    "↻",
-                                                    fontSize = 16.sp,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.clickable {
-                                                        messages.removeAt(idx)
-                                                        startStream()
-                                                    }.padding(vertical = 2.dp)
-                                                )
-                                                Text(
-                                                    if (m.truncated) "⏭ Продолжить (обрыв)" else "⏭ Продолжить",
-                                                    fontSize = 12.sp,
-                                                    fontWeight = if (m.truncated) FontWeight.SemiBold else FontWeight.Normal,
-                                                    color = if (m.truncated) DeepSeekBlue else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.clickable { startStream(continueTargetIdx = idx) }.padding(vertical = 2.dp)
-                                                )
-                                            }
-                                            if (safRetryOps.isNotEmpty() && safRetryTargetIdx >= 0 && idx == messages.size - 1) {
-                                                Text(
-                                                    "🔁 Повторить SAF",
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = DeepSeekBlue,
-                                                    modifier = Modifier.clickable { retrySafRead() }.padding(vertical = 2.dp)
-                                                )
-                                            }
-                                            Spacer(Modifier.weight(1f))
-                                            if (m.usage.isNotBlank()) {
-                                                Text(
-                                                    m.usage,
-                                                    fontSize = 11.sp,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-                                                )
-                                            }
-                                        }
+                                        AssistantFooterCard(
+                                            msg = m,
+                                            isLast = idx == messages.size - 1,
+                                            streaming = streaming,
+                                            hasSafRetry = safRetryOps.isNotEmpty() && safRetryTargetIdx >= 0 && idx == messages.size - 1,
+                                            onCopy = { copyPlain(ctx, m.content, "Ответ скопирован") },
+                                            onRetry = {
+                                                messages.removeAt(idx)
+                                                startStream()
+                                            },
+                                            onContinue = { startStream(continueTargetIdx = idx) },
+                                            onRetrySaf = { retrySafRead() }
+                                        )
                                     }
                                 }
                             }
@@ -1475,172 +1090,39 @@ fun ChatScreen(
                     }
                 }
 
-                // Bottom floating composer card
-                val cardBg = if (isDark) Color(0xFF1A1C22) else Color(0xFFFFFFFF)
-                val cardBorder = if (isDark) Color(0xFF2D3139) else Color(0xFFE6E8EE)
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                        .shadow(2.dp, RoundedCornerShape(24.dp))
-                        .clip(RoundedCornerShape(24.dp))
-                        .border(1.dp, cardBorder, RoundedCornerShape(24.dp))
-                        .background(cardBg)
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
-                ) {
-                    if (attachments.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(bottom = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            attachments.forEachIndexed { idx, f ->
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = MaterialTheme.colorScheme.surface,
-                                    border = BorderStroke(1.dp, if (f.name.startsWith("\uD83D\uDCBB ")) DeepSeekBlue.copy(alpha = 0.45f) else cardBorder),
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .clickable { selectTextMsg = Message(role = "user", content = "${f.name}\n\n${f.content}") }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        val chipLabel = if (f.name.startsWith("\uD83D\uDCBB ")) "${f.name} (${f.sizeLabel})" else "📄 ${f.name} (${f.sizeLabel})"
-                                        Text(
-                                            chipLabel,
-                                            fontSize = 12.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.widthIn(max = 220.dp)
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            "✕",
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.clickable { attachments.removeAt(idx) }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    ChipTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 24.dp, max = 130.dp),
-                        placeholder = "Напишите сообщение…",
-                        textColor = MaterialTheme.colorScheme.onBackground,
-                        fontSizeSp = 15f,
-                        lineHeightSp = 21f,
-                        maxLines = 6,
-                        cursorColor = DeepSeekBlue
-                    )
-
-                    Spacer(Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        ModePill(
-                            label = "⚛ Рассуждение",
-                            active = settings.thinkingEnabled,
-                            isDark = isDark,
-                            onClick = {
-                                val updated = settings.copy(thinkingEnabled = !settings.thinkingEnabled)
-                                settings = updated
-                                SettingsStore.save(ctx, updated)
-                            }
-                        )
-                        if (settings.provider in listOf("deepseek", "gemini")) {
-                        Spacer(Modifier.width(8.dp))
-                        ModePill(
-                            label = "🌐 Поиск",
-                            active = settings.webSearchEnabled,
-                            isDark = isDark,
-                            onClick = {
-                                val updated = settings.copy(webSearchEnabled = !settings.webSearchEnabled)
-                                settings = updated
-                                SettingsStore.save(ctx, updated)
-                            }
-                        )
-                        }
-                        Spacer(Modifier.weight(1f))
-
-                        Box {
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(CircleShape)
-                                    .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
-                                    .clickable { showAttachMenu = true },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "+",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onBackground
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = showAttachMenu,
-                                onDismissRequest = { showAttachMenu = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("\uD83D\uDCF7  Фото / PDF (OCR)") },
-                                    onClick = { showAttachMenu = false; launchPhotoOcr() }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("\uD83D\uDCF8  Камера (OCR)") },
-                                    onClick = { showAttachMenu = false; launchCameraOcr() }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("\uD83D\uDCCE  Прикрепить файл") },
-                                    onClick = { showAttachMenu = false; filePicker.launch(arrayOf("*/*")) }
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.width(10.dp))
-
-                        if (streaming) {
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .clip(CircleShape)
-                                    .background(DeepSeekBlue)
-                                    .clickable { cancelRequested = true; safStatus = ""; autoTermuxHandle?.requestCancel(ctx); autoTermuxHandle = null; streamJob?.cancel() },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("■", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                        } else {
-                            val canSend = input.isNotBlank() || attachments.isNotEmpty()
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (canSend) DeepSeekBlue
-                                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
-                                    )
-                                    .clickable(enabled = canSend) { sendCurrentInput() },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("↑", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
+                ChatInputBar(
+                    input = input,
+                    onInputChange = { input = it },
+                    attachments = attachments,
+                    onRemoveAttachment = { idx -> attachments.removeAt(idx) },
+                    onInspectAttachment = { f -> selectTextMsg = Message(role = "user", content = "${f.name}\n\n${f.content}") },
+                    settings = settings,
+                    streaming = streaming,
+                    isDark = isDark,
+                    showAttachMenu = showAttachMenu,
+                    onShowAttachMenuChange = { showAttachMenu = it },
+                    onToggleThinking = {
+                        val updated = settings.copy(thinkingEnabled = !settings.thinkingEnabled)
+                        settings = updated
+                        SettingsStore.save(ctx, updated)
+                    },
+                    onToggleSearch = {
+                        val updated = settings.copy(webSearchEnabled = !settings.webSearchEnabled)
+                        settings = updated
+                        SettingsStore.save(ctx, updated)
+                    },
+                    onPhotoOcr = { launchPhotoOcr() },
+                    onCameraOcr = { launchCameraOcr() },
+                    onPickFile = { filePicker.launch(arrayOf("*/*")) },
+                    onStop = {
+                        cancelRequested = true
+                        safStatus = ""
+                        autoTermuxHandle?.requestCancel(ctx)
+                        autoTermuxHandle = null
+                        streamJob?.cancel()
+                    },
+                    onSend = { sendCurrentInput() }
+                )
             }
         }
     }
@@ -1839,107 +1321,57 @@ fun ChatScreen(
         )
     }
 
-    // Incoming .deepapk Skill Package Installer Dialog
     incomingSkill?.let { pkg ->
         val existing = presets.firstOrNull { it.id == pkg.id }
-        var keepExistingSkill by remember(pkg.id) { mutableStateOf(true) }
-        fun installSkill(switchAndNewChat: Boolean) {
-            val list = presets.toMutableList()
-            val mergedLearned = when {
-                existing != null && keepExistingSkill && existing.learnedSkill.isNotBlank() -> existing.learnedSkill
-                pkg.learnedSkill.isNotBlank() -> pkg.learnedSkill
-                else -> ""
-            }
-            val updated = PromptPreset(
-                id = pkg.id,
-                name = pkg.name,
-                emoji = pkg.emoji,
-                prompt = pkg.prompt,
-                learnedSkill = mergedLearned,
-                isBuiltIn = existing?.isBuiltIn ?: false
-            )
-            val idx = list.indexOfFirst { it.id == pkg.id }
-            if (idx >= 0) list[idx] = updated else list.add(updated)
-            PresetStore.save(ctx, list)
-            presets = PresetStore.load(ctx)
-            if (switchAndNewChat) {
-                val s = ChatSession(
-                    id = System.currentTimeMillis().toString(),
-                    title = "Новый чат",
-                    updatedAt = System.currentTimeMillis(),
-                    messages = emptyList(),
-                    presetId = updated.id
-                )
-                sessions.add(0, s)
-                switchSession(s)
-                setChatPreset(updated.id)
-                ChatStore.saveSessions(ctx, sessions.toList())
-            } else {
-                setChatPreset(updated.id)
-            }
-            Toast.makeText(ctx, "Скилл «${updated.name}» сохранён", Toast.LENGTH_SHORT).show()
-            onConsumeSkill()
-        }
-        Dialog(onDismissRequest = onConsumeSkill) {
-            Surface(
-                shape = RoundedCornerShape(22.dp),
-                color = if (isDark) Color(0xFF1F2229) else Color.White,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("${pkg.emoji} ${pkg.name}", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        (if (existing != null) "Обновить существующий скилл" else "Новый скилл .deepapk") +
-                            " · ${pkg.prompt.length} симв.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            pkg.prompt.take(260),
-                            fontSize = 12.sp,
-                            maxLines = 5,
-                            overflow = TextOverflow.Ellipsis,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(10.dp)
-                        )
-                    }
-                    if (existing != null && existing.learnedSkill.isNotBlank()) {
-                        Spacer(Modifier.height(6.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = keepExistingSkill, onCheckedChange = { keepExistingSkill = it })
-                            Text("Сохранить накопленные правила (🧠)", fontSize = 12.5.sp)
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = onConsumeSkill) { Text("Отмена") }
-                        Spacer(Modifier.weight(1f))
-                        OutlinedButton(
-                            onClick = { installSkill(false) },
-                            shape = RoundedCornerShape(10.dp)
-                        ) { Text("Сохранить", fontSize = 12.5.sp) }
-                        Button(
-                            onClick = { installSkill(true) },
-                            shape = RoundedCornerShape(10.dp)
-                        ) { Text("В новый чат", fontSize = 12.5.sp) }
-                    }
+        IncomingSkillDialog(
+            pkg = pkg,
+            existing = existing,
+            isDark = isDark,
+            onDismiss = onConsumeSkill,
+            onInstall = { keepExistingSkill, switchAndNewChat ->
+                val list = presets.toMutableList()
+                val mergedLearned = when {
+                    existing != null && keepExistingSkill && existing.learnedSkill.isNotBlank() -> existing.learnedSkill
+                    pkg.learnedSkill.isNotBlank() -> pkg.learnedSkill
+                    else -> ""
                 }
+                val updated = PromptPreset(
+                    id = pkg.id,
+                    name = pkg.name,
+                    emoji = pkg.emoji,
+                    prompt = pkg.prompt,
+                    learnedSkill = mergedLearned,
+                    isBuiltIn = existing?.isBuiltIn ?: false
+                )
+                val idx = list.indexOfFirst { it.id == pkg.id }
+                if (idx >= 0) list[idx] = updated else list.add(updated)
+                PresetStore.save(ctx, list)
+                presets = PresetStore.load(ctx)
+                if (switchAndNewChat) {
+                    val s = ChatSession(
+                        id = System.currentTimeMillis().toString(),
+                        title = "Новый чат",
+                        updatedAt = System.currentTimeMillis(),
+                        messages = emptyList(),
+                        presetId = updated.id
+                    )
+                    sessions.add(0, s)
+                    switchSession(s)
+                    setChatPreset(updated.id)
+                    ChatStore.saveSessions(ctx, sessions.toList())
+                } else {
+                    setChatPreset(updated.id)
+                }
+                Toast.makeText(ctx, "Скилл «${updated.name}» сохранён", Toast.LENGTH_SHORT).show()
+                onConsumeSkill()
             }
-        }
+        )
     }
 
-    // Incoming Share Picker Dialog
     incomingShare?.let { share ->
-        val hasDocx = share.files.any { it.name.endsWith(".docx", ignoreCase = true) }
-        var sharePresetId by remember(share.id) { mutableStateOf(if (hasDocx) "docx_report" else "default") }
         val recentFive = remember(sessions.toList()) {
             sessions.sortedByDescending { it.updatedAt }.take(5)
         }
-        val dividerCol = if (isDark) Color(0xFF2B2F38) else Color(0xFFF0F1F4)
-
         fun applyShareToCurrent() {
             if (share.text.isNotBlank()) {
                 input = if (input.isBlank()) share.text else "${input.trimEnd()}\n\n${share.text}"
@@ -1947,110 +1379,30 @@ fun ChatScreen(
             share.files.forEach { attachments.add(it) }
             onConsumeShare()
         }
-
-        Dialog(
-            onDismissRequest = onConsumeShare,
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Surface(
-                shape = RoundedCornerShape(22.dp),
-                color = if (isDark) Color(0xFF1F2229) else Color.White,
-                modifier = Modifier.fillMaxWidth(0.94f).heightIn(max = 640.dp)
-            ) {
-                Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("📥 Принято из мессенджера", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        Text("✕", fontSize = 18.sp, modifier = Modifier.clickable { onConsumeShare() }.padding(4.dp))
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    if (share.files.isNotEmpty()) {
-                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            share.files.forEach { f ->
-                                Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface) {
-                                    Text("📎 ${f.name} (${f.sizeLabel})", fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp))
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(6.dp))
-                    }
-                    if (share.text.isNotBlank()) {
-                        Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                share.text.take(220),
-                                fontSize = 12.5.sp,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(10.dp)
-                            )
-                        }
-                        Spacer(Modifier.height(10.dp))
-                    }
-
-                    Text("➕ Новый чат с ролью:", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(6.dp))
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        presets.forEach { p ->
-                            ModePill(
-                                label = "${p.emoji} ${p.name}",
-                                active = sharePresetId == p.id,
-                                isDark = isDark,
-                                onClick = { sharePresetId = p.id }
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = {
-                            val newSess = ChatSession(
-                                id = System.currentTimeMillis().toString(),
-                                title = "Новый чат",
-                                updatedAt = System.currentTimeMillis(),
-                                messages = emptyList(),
-                                presetId = sharePresetId
-                            )
-                            sessions.add(0, newSess)
-                            switchSession(newSess)
-                            setChatPreset(sharePresetId)
-                            applyShareToCurrent()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        val pObj = presets.firstOrNull { it.id == sharePresetId }
-                        Text("Открыть в новом чате (${pObj?.emoji ?: ""} ${pObj?.name ?: ""})")
-                    }
-
-                    if (recentFive.isNotEmpty()) {
-                        Spacer(Modifier.height(12.dp))
-                        Text("Или добавить в последние чаты:", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(6.dp))
-                        recentFive.forEachIndexed { idx, s ->
-                            val rp = presets.firstOrNull { it.id == s.presetId }
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable {
-                                        switchSession(s)
-                                        applyShareToCurrent()
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(rp?.emoji ?: "💬", fontSize = 16.sp, modifier = Modifier.width(26.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(s.title, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(rp?.name ?: "Обычный", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                Text("→", color = DeepSeekBlue, fontWeight = FontWeight.Bold)
-                            }
-                            if (idx < recentFive.lastIndex) HorizontalDivider(color = dividerCol)
-                        }
-                    }
-                }
+        IncomingShareDialog(
+            share = share,
+            presets = presets,
+            recentFive = recentFive,
+            isDark = isDark,
+            onDismiss = onConsumeShare,
+            onOpenNewChat = { sharePresetId ->
+                val newSess = ChatSession(
+                    id = System.currentTimeMillis().toString(),
+                    title = "Новый чат",
+                    updatedAt = System.currentTimeMillis(),
+                    messages = emptyList(),
+                    presetId = sharePresetId
+                )
+                sessions.add(0, newSess)
+                switchSession(newSess)
+                setChatPreset(sharePresetId)
+                applyShareToCurrent()
+            },
+            onPickExisting = { s ->
+                switchSession(s)
+                applyShareToCurrent()
             }
-        }
+        )
     }
 
     // Add selected/copied message rule to preset
