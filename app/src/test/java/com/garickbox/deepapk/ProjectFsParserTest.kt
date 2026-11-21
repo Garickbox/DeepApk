@@ -197,4 +197,13 @@ class ProjectFsParserTest {
         val out = ProjectFs.stripReadTags(t, "tree")
         assertEquals("— прочитано: tree", out)
     }
+
+    @Test
+    fun termux_run_attr_and_body() {
+        val t = "<termux_run cmd='bash ~/deep_go.sh \"fix\"'/> и <termux_run>git status -s</termux_run>"
+        val cmds = extractTermuxCmds(t)
+        assertEquals(2, cmds.size)
+        assertEquals("bash ~/deep_go.sh \"fix\"", cmds[0].cmd)
+        assertEquals("git status -s", cmds[1].cmd)
+    }
 }

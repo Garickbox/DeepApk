@@ -171,6 +171,8 @@ fun ChatScreen(
     var addSkillDraft by remember { mutableStateOf<String?>(null) }
     var projectLabel by remember { mutableStateOf(ProjectFs.getLabel(ctx)) }
     var projectAutoRead by remember { mutableStateOf(ProjectFs.isEnabled(ctx)) }
+    var projectAutoTermux by remember { mutableStateOf(ProjectFs.isAutoTermux(ctx)) }
+    var autoTermuxHandle by remember { mutableStateOf<TermuxJobHandle?>(null) }
     var showProjectFsDialog by remember { mutableStateOf(false) }
     var showOcrBaseDialog by remember { mutableStateOf(false) }
     var ocrBusy by remember { mutableStateOf(false) }
@@ -425,7 +427,12 @@ fun ChatScreen(
 
             val activePreset = presets.firstOrNull { it.id == activePresetId } ?: presets.first()
             val extraGlobal = if (settings.systemPrompt.trim() == AppSettings.DEFAULT_SYSTEM_PROMPT.trim()) "" else settings.systemPrompt.trim()
-            val fsAdd = if (projectAutoRead && ProjectFs.isReady(ctx)) ProjectFs.systemPromptAddendum(ctx) else ""
+            val canAutoTermux = projectAutoTermux && TermuxBridge.hasRunPermission(ctx)
+            val fsAdd = when {
+                projectAutoRead && ProjectFs.isReady(ctx) -> ProjectFs.systemPromptAddendum(ctx, autoTermux = canAutoTermux)
+                canAutoTermux -> ProjectFs.termuxAddendum()
+                else -> ""
+            }
             val combinedExtra = listOf(extraGlobal, fsAdd).filter { it.isNotBlank() }.joinToString("\n\n")
             val effectiveSettings = settings.copy(systemPrompt = activePreset.buildSystemPrompt(combinedExtra))
             var wasCancelled = false
@@ -486,7 +493,8 @@ fun ChatScreen(
                     }
                 }
                 val last = messages.getOrNull(targetIdx)
-                var nextAutoReadPayload: String? = null
+                val feedbackParts = mutableListOf<String>()
+                var writeFailed = false
                 if (continueTargetIdx == null && last != null && last.content.isBlank() && last.reasoning.isBlank()) {
                     messages.removeAt(targetIdx)
                 } else if (last != null && last.content.isNotBlank()) {
@@ -499,26 +507,40 @@ fun ChatScreen(
                         }
                     }
                     val writeOps = ProjectFs.extractWriteOps(last.content)
-                    if (ProjectFs.isReady(ctx) && writeOps.isNotEmpty()) {
-                        val wRes = try {
-                            withContext(Dispatchers.IO) { ProjectFs.applyDirect(ctx, writeOps) }
-                        } catch (e: Throwable) {
-                            FsApplyResult(false, "Ошибка применения: " + (e.message ?: e.javaClass.simpleName))
-                        }
-                        if (wRes.ok) {
-                            Toast.makeText(ctx, wRes.message, Toast.LENGTH_SHORT).show()
-                        } else {
-                            error = wRes.message
+                    val canContinueTool = !wasCancelled && !cancelRequested && continueTargetIdx == null && toolDepth < ChatSafController.SAF_MAX_TOOL_DEPTH
+                    if (writeOps.isNotEmpty()) {
+                        if (ProjectFs.isReady(ctx)) {
+                            val wRes = try {
+                                withContext(Dispatchers.IO) { ProjectFs.applyDirect(ctx, writeOps) }
+                            } catch (e: Throwable) {
+                                FsApplyResult(false, "Ошибка применения: " + (e.message ?: e.javaClass.simpleName))
+                            }
+                            if (wRes.ok) {
+                                Toast.makeText(ctx, wRes.message, Toast.LENGTH_SHORT).show()
+                                if (canContinueTool) {
+                                    val filesLbl = wRes.modifiedFiles.joinToString(", ")
+                                    feedbackParts.add("[SAF WRITE OK] ${wRes.message}" + if (filesLbl.isNotBlank()) " ($filesLbl)" else "")
+                                }
+                            } else {
+                                writeFailed = true
+                                error = wRes.message
+                                if (canContinueTool) {
+                                    feedbackParts.add("[SAF WRITE ERROR] ${wRes.message}")
+                                }
+                            }
+                        } else if (canContinueTool) {
+                            writeFailed = true
+                            feedbackParts.add("[SAF WRITE ERROR] Папка SAF не подключена — <fs_patch>/<fs_write> не применён.")
                         }
                     }
-                    if (!wasCancelled && !cancelRequested && continueTargetIdx == null && projectAutoRead && ProjectFs.isReady(ctx) && toolDepth < ChatSafController.SAF_MAX_TOOL_DEPTH) {
+                    if (canContinueTool && projectAutoRead && ProjectFs.isReady(ctx)) {
                         val readOps = ProjectFs.extractReadOps(last.content)
                         if (readOps.isNotEmpty()) {
                             safStatus = ChatSafController.buildStatusText(readOps.first())
                             val res = ChatSafController.runSafRead(
                                 ctx = ctx,
                                 ops = readOps,
-                                originalContent = last.content,
+                                originalContent = messages.getOrNull(targetIdx)?.content ?: last.content,
                                 timeoutMsg = "> ⏱ SAF-чтение не ответило за 180 с (файл большой или папка недоступна). Нажми «Отправить» ещё раз, чтобы повторить."
                             )
                             if (!cancelRequested) {
@@ -526,8 +548,10 @@ fun ChatScreen(
                                     is SafReadResult.Success -> {
                                         safRetryTargetIdx = -1
                                         safRetryOps = emptyList()
-                                        messages[targetIdx] = last.copy(content = res.strippedContent)
-                                        nextAutoReadPayload = res.payload
+                                        messages.getOrNull(targetIdx)?.let { curM ->
+                                            messages[targetIdx] = curM.copy(content = res.strippedContent)
+                                        }
+                                        feedbackParts.add(res.payload)
                                     }
                                     is SafReadResult.Error -> {
                                         messages.add(Message(role = "assistant", content = res.message))
@@ -543,13 +567,45 @@ fun ChatScreen(
                             }
                         }
                     }
+                    val termuxCmds = if (canContinueTool) extractTermuxCmds(last.content).take(2) else emptyList()
+                    if (termuxCmds.isNotEmpty()) {
+                        if (writeFailed) {
+                            feedbackParts.add("[TERMUX SKIPPED] Патч SAF не применился — команда не запущена. Сначала исправь патч.")
+                        } else if (projectAutoTermux && TermuxBridge.hasRunPermission(ctx)) {
+                            for (tc in termuxCmds) {
+                                if (cancelRequested) break
+                                val handle = TermuxJobHandle()
+                                autoTermuxHandle = handle
+                                safStatus = "Termux: ${tc.cmd.take(36)}…"
+                                val (rc, body, dur) = ChatSafController.runTermuxCmd(ctx, tc.cmd, handle) { el, tail ->
+                                    safStatus = "⏳ Termux ${el}с" + if (tail.isNotBlank()) " · ${tail.take(40)}" else ""
+                                }
+                                autoTermuxHandle = null
+                                if (cancelRequested) break
+                                val icon = if (rc == 0) "\u2705" else "\u26A0\uFE0F"
+                                val cleanBody = body.trim().ifBlank { "(пусто)" }
+                                val fence = if (cleanBody.contains("```")) "````" else "```"
+                                feedbackParts.add("[Файл: \uD83D\uDCBB termux $icon exit=$rc \u00B7 ${dur}с]\n${fence}text\n$cleanBody\n$fence")
+                                if (rc != 0) break
+                            }
+                            if (!cancelRequested) {
+                                messages.getOrNull(targetIdx)?.let { curM ->
+                                    val strippedT = stripTermuxTags(curM.content).replace(Regex("""\n{3,}"""), "\n\n").trim()
+                                    val finalT = if (strippedT.isBlank()) "— выполнено в Termux: ${termuxCmds.first().cmd.take(60)}" else strippedT
+                                    messages[targetIdx] = curM.copy(content = finalT)
+                                }
+                            }
+                        } else if (projectAutoTermux) {
+                            error = "Нет разрешения Termux RUN_COMMAND для авто-запуска"
+                        }
+                    }
                 }
                 persistCurrentSession()
                 streaming = false
                 streamJob = null
-                if (nextAutoReadPayload != null && !cancelRequested) {
-                    safStatus = "Отправляю файлы ИИ…"
-                    messages.add(Message(role = "user", content = nextAutoReadPayload))
+                if (feedbackParts.isNotEmpty() && !cancelRequested) {
+                    safStatus = "Отправляю результат ИИ…"
+                    messages.add(Message(role = "user", content = feedbackParts.joinToString("\n\n")))
                     persistCurrentSession()
                     startStream(scrollAnchorIdx = messages.size - 1, toolDepth = toolDepth + 1)
                 } else { safStatus = "" }
@@ -1562,7 +1618,7 @@ fun ChatScreen(
                                     .size(34.dp)
                                     .clip(CircleShape)
                                     .background(DeepSeekBlue)
-                                    .clickable { cancelRequested = true; safStatus = ""; streamJob?.cancel() },
+                                    .clickable { cancelRequested = true; safStatus = ""; autoTermuxHandle?.requestCancel(ctx); autoTermuxHandle = null; streamJob?.cancel() },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text("■", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -1759,11 +1815,16 @@ fun ChatScreen(
         ProjectFsDialog(
             projectLabel = projectLabel,
             projectAutoRead = projectAutoRead,
+            projectAutoTermux = projectAutoTermux,
             isDark = isDark,
             onDismiss = { showProjectFsDialog = false },
             onToggleAutoRead = { v ->
                 projectAutoRead = v
                 ProjectFs.setEnabled(ctx, v)
+            },
+            onToggleAutoTermux = { v ->
+                projectAutoTermux = v
+                ProjectFs.setAutoTermux(ctx, v)
             },
             onChangeFolder = {
                 showProjectFsDialog = false

@@ -20,7 +20,7 @@ sealed class SafReadResult {
  */
 object ChatSafController {
     const val SAF_READ_TIMEOUT_MS = 180_000L
-    const val SAF_MAX_TOOL_DEPTH = 8
+    const val SAF_MAX_TOOL_DEPTH = 10
 
     private const val MSG_SECURITY =
         "> 🔒 Доступ к папке проекта отозван или изменился. Переподключи папку через чип SAF в шапке и повтори."
@@ -71,5 +71,46 @@ object ChatSafController {
             android.util.Log.e("DeepApk", "SAF read failed", te)
             SafReadResult.Error("> ⚠️ Ошибка SAF-чтения: ${te.javaClass.simpleName}: ${te.message ?: "unknown"}")
         }
+    }
+
+    internal fun isBlockedTermuxCmd(cmd: String): Boolean {
+        val c = cmd.lowercase().trim()
+        if (Regex("""(^|[;&|\s])rm\s+-[a-z]*r[a-z]*\s+(/|~|\$home)(\s|$)""").containsMatchIn(c)) return true
+        if (c.contains("mkfs.") || c.contains(":(){ :|:& };:")) return true
+        return false
+    }
+
+    suspend fun runTermuxCmd(
+        ctx: Context,
+        cmd: String,
+        handle: TermuxJobHandle,
+        onTick: (Int, String) -> Unit
+    ): Triple<Int, String, Int> {
+        if (isBlockedTermuxCmd(cmd)) {
+            return Triple(-5, "[TERMUX BLOCKED] Опасная команда отклонена: $cmd", 0)
+        }
+        var outCode = -1
+        var outBody = ""
+        var outDur = 0
+        try {
+            TermuxBridge.runScriptAndWatch(
+                ctx = ctx,
+                scriptText = cmd,
+                interpreter = "bash",
+                stallTimeoutSec = 120,
+                totalTimeoutSec = 300,
+                jobHandle = handle,
+                onTick = onTick,
+                onDone = { code, body, dur ->
+                    outCode = code
+                    outBody = body
+                    outDur = dur
+                }
+            )
+        } catch (ce: CancellationException) {
+            handle.requestCancel(ctx)
+            throw ce
+        }
+        return Triple(outCode, outBody, outDur)
     }
 }

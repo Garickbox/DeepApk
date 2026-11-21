@@ -26,9 +26,11 @@ import androidx.compose.ui.window.Dialog
 internal fun ProjectFsDialog(
     projectLabel: String,
     projectAutoRead: Boolean,
+    projectAutoTermux: Boolean,
     isDark: Boolean,
     onDismiss: () -> Unit,
     onToggleAutoRead: (Boolean) -> Unit,
+    onToggleAutoTermux: (Boolean) -> Unit,
     onChangeFolder: () -> Unit,
     onClear: () -> Unit
 ) {
@@ -46,6 +48,13 @@ internal fun ProjectFsDialog(
                     Switch(
                         checked = projectAutoRead,
                         onCheckedChange = onToggleAutoRead
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text("Авто-Termux для ИИ (пуш/CI)", fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = projectAutoTermux,
+                        onCheckedChange = onToggleAutoTermux
                     )
                 }
                 Spacer(Modifier.height(12.dp))

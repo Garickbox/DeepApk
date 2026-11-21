@@ -39,6 +39,7 @@ object ProjectFs {
     private const val KEY_URI = "tree_uri"
     private const val KEY_LABEL = "tree_label"
     private const val KEY_ENABLED = "auto_enabled"
+    private const val KEY_AUTO_TERMUX = "auto_termux"
 
     private val IGNORED_DIRS = setOf(".git", ".gradle", "build", ".idea", "apk", "node_modules", "__pycache__", ".cxx", ".ocr")
     private val BINARY_EXTS = setOf(
@@ -74,6 +75,15 @@ object ProjectFs {
     fun isEnabled(ctx: Context): Boolean =
         ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
 
+    fun setAutoTermux(ctx: Context, enabled: Boolean) {
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_AUTO_TERMUX, enabled)
+            .apply()
+    }
+
+    fun isAutoTermux(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(KEY_AUTO_TERMUX, true)
+
     fun getLabel(ctx: Context): String =
         ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).getString(KEY_LABEL, "").orEmpty()
 
@@ -86,15 +96,21 @@ object ProjectFs {
 
     fun isReady(ctx: Context): Boolean = getTreeUri(ctx) != null
 
-    fun systemPromptAddendum(ctx: Context): String {
+    fun termuxAddendum(): String =
+        "TERMUX-АВТОЗАПУСК: можно выполнять команды самому без подтверждения (до 2 за ход, до 10 шагов подряд): " +
+        "<termux_run>КОМАНДА</termux_run> или <termux_run cmd=\"КОМАНДА\"/>. Вывод и exit-код вернутся автоматически."
+
+    fun systemPromptAddendum(ctx: Context, autoTermux: Boolean = false): String {
         val label = getLabel(ctx).ifBlank { "Проект" }
-        return "ДОСТУП К ПРОЕКТУ (SAF, папка «$label»): подключены реальные исходники.\n" +
-            "Не гадай и не проси юзера гонять grep — сразу выводи до 4 тегов (пути только реальные из fs_tree/fs_grep):\n" +
+        val base = "ДОСТУП К ПРОЕКТУ (SAF, папка «$label»): подключены реальные исходники.\n" +
+            "Не гадай и не гоняй чтение в Termux — сразу выводи до 4 тегов за ход (пути реальные из fs_tree/fs_grep):\n" +
             "- <fs_tree/> или <fs_tree path=\"РЕАЛЬНАЯ_ПАПКА\"/>\n" +
             "- <fs_grep pattern=\"ТЕКСТ\" path=\"РЕАЛЬНАЯ_ПАПКА\"/>\n" +
             "- <fs_read path=\"РЕАЛЬНЫЙ_ФАЙЛ\" start=\"1\" end=\"180\"/>\n" +
-            "Правка в SAF: <fs_patch path=\"РЕАЛЬНЫЙ_ФАЙЛ\"><old>ТОЧНЫЙ_ФРАГМЕНТ</old><new>НОВЫЙ_КОД</new></fs_patch> или <fs_write path=\"РЕАЛЬНЫЙ_ФАЙЛ\">КОД</fs_write>.\n" +
+            "Правка в SAF применяется МГНОВЕННО (без кнопки ОК), а статус вернётся тебе в следующий ход:\n" +
+            "<fs_patch path=\"РЕАЛЬНЫЙ_ФАЙЛ\"><old>ТОЧНЫЙ_ФРАГМЕНТ</old><new>НОВЫЙ_КОД</new></fs_patch> или <fs_write path=\"РЕАЛЬНЫЙ_ФАЙЛ\">КОД</fs_write>.\n" +
             "📚 КНИГИ/OCR: при вопросе про книгу/PDF сначала проверь \".ocr\" через <fs_tree path=\".ocr\"/> и <fs_grep pattern=\"СЛОВО\" path=\".ocr\"/> (внутри _name.txt и page_NNNNN.md)."
+        return if (autoTermux) base + "\n" + termuxAddendum() else base
     }
 
     internal fun sanitizeRelPath(raw: String): String? {
@@ -589,6 +605,10 @@ internal fun normalizeDsml(input: String): String {
                 val body = ps["content"] ?: ps["text"] ?: ps["body"] ?: ""
                 "<" + name + " path=\"$pa\">" + body + "</" + name + ">"
             }
+            "termux_run" -> {
+                val cmd = ps["cmd"] ?: ps["command"] ?: return@replace m.value
+                "<termux_run>$cmd</termux_run>"
+            }
             else -> m.value
         }
     }
@@ -611,14 +631,18 @@ internal fun isPlaceholderPath(input: String): Boolean {
 data class TermuxCmd(val cmd: String, val rangeStart: Int)
 
 fun extractTermuxCmds(raw: String): List<TermuxCmd> {
-    if (!raw.contains("<termux_run")) return emptyList()
+    if (!raw.contains("<termux_run", ignoreCase = true) && !raw.contains("DSML")) return emptyList()
     val text = normalizeDsml(raw)
+    if (!text.contains("<termux_run", ignoreCase = true)) return emptyList()
     val out = mutableListOf<TermuxCmd>()
-    Regex("""<termux_run\s+cmd="([^"]{1,500})"\s*(?:/>|>[\s\S]*?</termux_run>)""",
-           RegexOption.IGNORE_CASE).findAll(text).forEach { m ->
-        val c = m.groupValues[1].trim()
-        if (c.isNotBlank()) out.add(TermuxCmd(c, m.range.first))
-    }
+    Regex("""<termux_run([^>]*)(?:/>|>([\s\S]*?)</termux_run>)""", RegexOption.IGNORE_CASE)
+        .findAll(text).forEach { m ->
+            val attrs = ProjectFs.parseAttrs(m.groupValues[1])
+            val cmdAttr = attrs["cmd"].orEmpty().trim()
+            val body = m.groupValues[2].trim()
+            val c = cmdAttr.ifBlank { body }.take(1200)
+            if (c.isNotBlank()) out.add(TermuxCmd(c, m.range.first))
+        }
     return out
 }
 
